@@ -1,0 +1,45 @@
+.seekBarContainer {
+  grid-area: seekbar;
+  width: 100%;
+  color: var(--primaryTextColor);
+
+  &:hover {
+    .seekingTo {
+      opacity: 1;
+    }
+  }
+
+  .seekBar {
+    position: relative;
+    height: 10px;
+    background: var(--secondaryColor);
+    border-radius: 10px;
+    width: 100%;
+    cursor: pointer;
+    overflow: hidden;
+    z-index: 0;
+    transition: height 100ms ease-in-out;
+
+    &:hover {
+      border-radius: 10px;
+      height: 20px;
+    }
+
+    .buffer,
+    .current {
+      height: inherit;
+      width: 0;
+      pointer-events: none;
+    }
+
+    .buffer {
+      position: absolute;
+      background: var(--quaternaryColor);
+      z-index: -1;
+    }
+
+    .current {
+      background: var(--accentColor);
+    }
+  }
+}

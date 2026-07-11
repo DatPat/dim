@@ -1,0 +1,147 @@
+.authForm {
+  display: grid;
+  gap: 3em;
+  grid-template-areas: "title" "fields" "actions";
+  grid-template-rows: 1fr auto 1fr;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+  padding: 2em;
+  color: var(--primaryTextColor);
+
+  header {
+    grid-area: title;
+    align-self: flex-end;
+  }
+
+  .logo {
+    margin-bottom: 2em;
+    width: 4em;
+  }
+
+  .fields {
+    grid-area: fields;
+  }
+
+  footer {
+    grid-area: actions;
+    align-self: flex-start;
+  }
+
+  header {
+    h1 {
+      font-family: "Roboto Bold", Arial;
+    }
+
+    h3 {
+      margin-top: 1em;
+      color: var(--tertiaryTextColor);
+    }
+  }
+
+  .fields {
+    display: grid;
+    gap: 2em;
+    border-radius: 10px;
+    width: 100%;
+
+    label {
+      .name {
+        display: flex;
+        align-items: center;
+        color: var(--secondaryTextColor);
+      }
+
+      .horizontal-err {
+        padding: 2px 5px;
+        font-size: 0.8em;
+        margin-left: 5px;
+        background: #ee4740;
+      }
+
+      svg {
+        font-size: 0.8em;
+        fill: var(--secondaryTextColor);
+      }
+
+      .name > p {
+        margin: 0 5px;
+        font-family: "Roboto Condensed Regular", Arial;
+      }
+
+      input {
+        font-family: "Roboto Regular", Arial;
+        transition: background 0.3s ease-in-out;
+        margin-top: 10px;
+        background: var(--tertiaryColor);
+        outline: none;
+        border: none;
+        border-radius: 5px;
+        padding: 10px 20px;
+        color: var(--primaryTextColor);
+        width: 100%;
+        height: 40px;
+        overflow: hidden;
+        white-space: nowrap;
+
+        &:focus,
+        &:hover {
+          background: var(--quaternaryColor);
+        }
+      }
+    }
+  }
+
+  footer {
+    a {
+      &:hover {
+        text-decoration: underline;
+      }
+
+      &:last-child {
+        margin-top: 0.5em;
+      }
+    }
+
+    button {
+      margin-bottom: 1em;
+      padding: 10px 20px;
+      width: 100%;
+      font-family: "Roboto Bold", Arial;
+      font-size: 1.1em;
+      background: var(--accentColor);
+      color: var(--primaryTextColor);
+      border-radius: 5px;
+      transition: 0.2s ease-in-out;
+      transition-property: background, opacity;
+
+      &.false:hover {
+        background: #e6820d;
+      }
+
+      // logging_in/registering
+      &.true {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+    }
+  }
+}
+
+@media only screen and (min-width: 350px) {
+  .authForm footer .actions {
+    display: flex;
+    justify-content: space-between;
+
+    a:last-child {
+      margin-top: unset;
+    }
+  }
+}
+
+@media only screen and (min-width: 550px) {
+  .authForm {
+    width: 550px;
+    margin: 0 auto;
+  }
+}

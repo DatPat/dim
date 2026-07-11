@@ -1,0 +1,59 @@
+.videoControls {
+  grid-area: controls;
+  align-self: flex-end;
+  display: grid;
+  gap: 1em;
+  margin: 0 auto;
+  max-width: 1080px;
+  width: 100%;
+  position: relative;
+  grid-template-columns: 1fr 1fr;
+  transition: opacity 100ms ease-in-out;
+  color: #fff;
+  grid-template-areas:
+    "name time"
+    "seekbar seekbar"
+    "actions actions";
+
+  &.true {
+    opacity: 1;
+  }
+
+  &.false {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .name svg,
+  .time svg {
+    fill: var(--accentColor);
+    width: 0.4em;
+  }
+
+  .name {
+    display: grid;
+    align-items: flex-end;
+    grid-template-columns: auto auto;
+    gap: 0.5em;
+    justify-self: flex-start;
+    grid-area: name;
+    transition: opacity 100ms ease-in-out;
+
+    .season-ep {
+      display: grid;
+      align-items: center;
+      grid-template-columns: auto auto auto;
+      gap: 0.2em;
+    }
+  }
+
+  .time {
+    display: grid;
+    grid-template-columns: auto auto auto;
+    align-items: center;
+    gap: 0.5em;
+    justify-self: flex-end;
+    grid-area: time;
+    transition: opacity 100ms ease-in-out;
+  }
+}

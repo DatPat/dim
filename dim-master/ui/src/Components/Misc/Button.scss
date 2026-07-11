@@ -1,0 +1,88 @@
+.btn {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 1em;
+  border-radius: 10px;
+  background: transparent;
+  transition: 200ms ease-in-out;
+  transition-property: background, opacity;
+  font-family: "Roboto Bold";
+  outline: none;
+
+  &:not(.disabled) {
+    opacity: 1;
+  }
+
+  &.primary {
+    padding: 0.5em;
+    background: var(--accentLighterColor);
+
+    svg {
+      fill: var(--accentTextColor);
+    }
+
+    &:hover {
+      background: var(--accentColor);
+    }
+  }
+
+  &.secondary {
+    color: var(--primaryTextColor);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &.contrast {
+    height: 4em;
+    width: 4.2em;
+    min-width: 4.2em;
+    border-radius: 10px;
+    background-color: var(--modalTertiaryColor);
+    font-size: 0.5em;
+
+    &:not(.disabled):hover {
+      background-color: var(--quinaryColor);
+    }
+  }
+
+  &.icon {
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--quinaryColor);
+
+    p {
+      padding: 0.5em 0.8em;
+      background: var(--accentLighterColor);
+      transition: 200ms ease-in-out;
+      transition-property: background, opacity;
+    }
+
+    svg {
+      font-size: 0.6em;
+      margin: 0 10px;
+      fill: var(--primaryTextColor);
+    }
+
+    &:hover p {
+      background: var(--accentColor);
+    }
+  }
+
+  &.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &.critical {
+    padding: 0.5em;
+    background: var(--criticalLighterColor);
+    color: var(--criticalTextColor);
+
+    &:hover {
+      background: var(--criticalColor);
+    }
+  }
+}

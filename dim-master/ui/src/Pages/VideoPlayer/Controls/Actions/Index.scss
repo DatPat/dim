@@ -1,0 +1,135 @@
+.videoActions {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, 1fr);
+  justify-self: center;
+  grid-area: actions;
+
+  section {
+    display: flex;
+    align-items: center;
+    width: 100%;
+
+    &.middle {
+      justify-content: center;
+    }
+
+    &.right {
+      justify-content: flex-end;
+    }
+  }
+
+  .volSliderWrapper {
+    align-items: center;
+    display: none;
+    height: 100%;
+    width: 80px;
+    position: relative;
+
+    &:hover .volSlider {
+      height: 10px;
+
+      &::after {
+        opacity: 1;
+      }
+    }
+
+    .volSlider {
+      animation: appear 250ms ease-in-out;
+      background: var(--secondaryColor);
+      height: 5px;
+      width: 100%;
+      cursor: pointer;
+      border-radius: 10px;
+      overflow: hidden;
+      transition: height 100ms ease-in-out;
+
+      &::after {
+        content: attr(data-currentVolume);
+        position: absolute;
+        left: calc(100% + 0.5em);
+        top: 50%;
+        opacity: 0;
+        width: 0;
+        pointer-events: none;
+        transition: opacity 100ms ease-in-out;
+        transform: translateY(-50%);
+      }
+
+      .vol {
+        border-radius: 10px;
+        height: 100%;
+        background: var(--accentColor);
+      }
+    }
+  }
+
+  button,
+  .filler {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 1em;
+    border-radius: 5px;
+    background: transparent;
+    pointer-events: initial;
+
+    &:not(.false):hover svg,
+    &:not(.false):focus svg {
+      fill: var(--accentColor);
+    }
+
+    svg {
+      fill: #eee;
+      transition: fill 100ms ease-in-out;
+      width: 16px;
+    }
+
+    &.trackActive-true {
+      &:not(.menuActive-true):hover {
+        background: var(--primaryColor);
+      }
+
+      svg {
+        fill: var(--accentColor);
+      }
+    }
+
+    &.menuActive-true {
+      background: var(--secondaryColor);
+
+      svg {
+        fill: var(--primaryTextColor);
+      }
+    }
+
+    &.false {
+      pointer-events: none;
+
+      svg {
+        fill: #555;
+      }
+    }
+  }
+
+  .filler {
+    flex: 1;
+    grid-area: filler;
+  }
+
+  .volume {
+    padding: 1em 1em 1em 0;
+  }
+
+  .fullscreen {
+    padding: 1em 0 1em 1em;
+  }
+}
+
+@media only screen and (min-width: 600px) {
+  .videoActions {
+    .volSliderWrapper {
+      display: flex;
+    }
+  }
+}

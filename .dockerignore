@@ -1,0 +1,7 @@
+dim-master/target
+nightfall-master/target
+dim-master/ui/node_modules
+dim-master/ui/build
+dim-master/config
+dim-master/metadata
+*.zip

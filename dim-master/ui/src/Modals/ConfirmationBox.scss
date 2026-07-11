@@ -1,0 +1,52 @@
+.modalConfirmation {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  color: var(--primaryTextColor);
+  padding: 20px;
+
+  .separator {
+    margin-top: 0.5em;
+  }
+
+  h3 {
+    font-family: "Roboto Condensed Regular", Arial;
+  }
+
+  p {
+    margin: 1em 0;
+  }
+
+  .options {
+    display: grid;
+    justify-content: flex-end;
+    grid-template-columns: auto auto;
+    gap: 0.5em;
+
+    button {
+      font-size: 16px;
+      filter: saturate(0.7);
+      transition: filter 0.3s ease-in-out;
+      font-family: "Roboto Bold", Arial;
+      padding: 0.5em;
+      border-radius: 10px;
+      outline: none;
+      background: var(--accentColor);
+      color: var(--primaryTextColor);
+
+      &:focus,
+      &:hover {
+        filter: saturate(1);
+      }
+    }
+
+    .cancelBtn {
+      transition: color 0.3s ease-in-out;
+      background: transparent;
+
+      &:focus,
+      &:hover {
+        color: #ff6961;
+      }
+    }
+  }
+}

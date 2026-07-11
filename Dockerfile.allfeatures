@@ -1,0 +1,170 @@
+FROM node:22-bookworm AS web
+WORKDIR /ui
+COPY dim-master/ui/package*.json ./
+RUN npm ci
+COPY dim-master/ui ./
+ENV NODE_OPTIONS=--openssl-legacy-provider
+RUN npm run build
+
+# ── FFmpeg from source (with VAAPI + QSV on amd64, V4L2 on arm64) ──
+# Using trixie for newer libvpl / VA-API driver libraries.
+FROM debian:trixie AS ffmpeg-builder
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+ARG FFMPEG_VERSION=8.0.1
+
+RUN sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
+    /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config wget ca-certificates nasm yasm \
+    libdrm-dev \
+    libx264-dev libx265-dev \
+    libvorbis-dev libtheora-dev libopus-dev \
+    libass-dev libfreetype-dev libfontconfig-dev libfribidi-dev \
+    libssl-dev \
+    libdav1d-dev \
+    && if [ "$TARGETARCH" = "amd64" ]; then \
+         apt-get install -y --no-install-recommends \
+           libva-dev libvpl-dev libsvtav1enc-dev; \
+       else \
+         apt-get install -y --no-install-recommends \
+           libva-dev libv4l-dev libsvtav1enc-dev; \
+       fi \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
+# amd64: upstream FFmpeg release tarball
+# arm64: Sky1-Linux fork with V4L2 M2M fixes for Linlon MVX VPU
+#        (fixes green tint caused by incorrect multi-planar buffer handling)
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        wget -q https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz \
+        && tar xf ffmpeg-${FFMPEG_VERSION}.tar.xz \
+        && mv ffmpeg-${FFMPEG_VERSION} ffmpeg-src; \
+    else \
+        git clone --depth 1 --branch sky1 https://github.com/Sky1-Linux/ffmpeg-sky1.git ffmpeg-src; \
+    fi \
+    && cd ffmpeg-src \
+    && EXTRA_FLAGS="" \
+    && if [ "$TARGETARCH" = "amd64" ]; then \
+         EXTRA_FLAGS="--enable-libvpl --enable-libsvtav1"; \
+       else \
+         EXTRA_FLAGS="--enable-v4l2-m2m --enable-libsvtav1"; \
+       fi \
+    && ./configure \
+        --prefix=/usr/local \
+        --enable-gpl \
+        --enable-nonfree \
+        --enable-vaapi \
+        --enable-libdrm \
+        --enable-libx264 \
+        --enable-libx265 \
+        --enable-libvorbis \
+        --enable-libtheora \
+        --enable-libopus \
+        --enable-libass \
+        --enable-libfreetype \
+        --enable-libfontconfig \
+        --enable-libfribidi \
+        --enable-openssl \
+        --enable-libdav1d \
+        $EXTRA_FLAGS \
+    && make -j$(nproc) \
+    && make install
+
+# Collect ALL shared-library dependencies of ffmpeg/ffprobe and the ffmpeg
+# shared libs themselves.  Uses the resolved path from ldd output (the path
+# after "=>"), which may be under /usr/lib/ or /lib/ depending on distro
+# layout.  System-provided base libs (libc, ld-linux, etc.) are harmlessly
+# included — they'll be shadowed by the runtime image's own copies.
+RUN mkdir -p /runtime-libs && \
+    { ldd /usr/local/bin/ffmpeg 2>/dev/null; \
+      ldd /usr/local/bin/ffprobe 2>/dev/null; \
+      for f in /usr/local/lib/lib*.so*; do [ -f "$f" ] && ldd "$f" 2>/dev/null; done; \
+    } | grep -oP '=> \K/\S+' | sort -u | \
+    while read lib; do \
+        [ -f "$lib" ] && cp -Ln "$lib" /runtime-libs/ 2>/dev/null || true; \
+    done && \
+    echo "Collected $(ls /runtime-libs/ | wc -l) runtime libraries"
+
+# ── Rust build ──
+FROM rust:bookworm AS builder
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+ARG GIT_TAG=unknown
+ARG GIT_SHA=unknown
+ENV GIT_TAG=${GIT_TAG}
+ENV GIT_SHA=${GIT_SHA}
+RUN apt-get update && apt-get install -y \
+    sqlite3 \
+    pkg-config \
+    && if [ "$TARGETARCH" = "amd64" ]; then \
+         apt-get install -y libva-dev; \
+       fi \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY nightfall-master ./nightfall-master
+COPY dim-master ./dim-master
+COPY --from=web /ui/build dim-master/ui/build
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        cargo build --release --manifest-path dim-master/Cargo.toml --features vaapi,qsv; \
+    else \
+        cargo build --release --manifest-path dim-master/Cargo.toml --features v4l2; \
+    fi && \
+    test -x dim-master/target/release/dim
+
+# ── Runtime ──
+# Trixie provides a newer intel-media-va-driver-non-free that supports
+# VA-API 1.15+ (required by QSV via libvpl).
+FROM debian:trixie-slim
+ARG TARGETARCH
+ENV RUST_BACKTRACE=full
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's/^Components: main$/Components: main contrib non-free non-free-firmware/' \
+    /etc/apt/sources.list.d/debian.sources
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libfontconfig1 \
+    libfribidi0 \
+    libharfbuzz0b \
+    libsqlite3-0 \
+    libdrm2 \
+    && if [ "$TARGETARCH" = "amd64" ]; then \
+         apt-get install -y --no-install-recommends \
+           libva-drm2 \
+           libva2 \
+           libvpl2 \
+           libmfx-gen1.2 \
+           intel-media-va-driver-non-free; \
+       else \
+         apt-get install -y --no-install-recommends \
+           libv4l-0 \
+           v4l-utils; \
+       fi \
+    && rm -rf /var/lib/apt/lists/*
+
+# Custom FFmpeg binaries and their own shared libs (libav*, libsw*)
+COPY --from=ffmpeg-builder /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+COPY --from=ffmpeg-builder /usr/local/lib/lib*.so* /usr/local/lib/
+
+# External runtime libraries (x264, x265, opus, dav1d, etc.) collected
+# automatically from the builder — no hard-coded soname package names.
+COPY --from=ffmpeg-builder /runtime-libs/ /usr/local/lib/
+RUN ldconfig
+
+RUN mkdir -p /opt/dim/utils && \
+    ln -s /usr/local/bin/ffmpeg /opt/dim/utils/ffmpeg && \
+    ln -s /usr/local/bin/ffprobe /opt/dim/utils/ffprobe
+
+COPY --from=builder /build/dim-master/target/release/dim /opt/dim/dim
+
+EXPOSE 8000
+VOLUME ["/opt/dim/config"]
+
+ENV RUST_LOG=info
+WORKDIR /opt/dim
+CMD ["./dim"]

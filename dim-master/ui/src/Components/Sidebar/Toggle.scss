@@ -1,0 +1,42 @@
+.sidebarToggleWrapper {
+  position: relative;
+  padding: 1em;
+
+  .logo {
+    width: 32px;
+  }
+
+  .version {
+    display: inline-block;
+    vertical-align: middle;
+    height: 100%;
+    margin-left: 1rem;
+    color: var(--tertiaryTextColor);
+    font-size: 0.8em;
+  }
+
+  .toggle {
+    position: absolute;
+    bottom: 25%;
+    right: 1em;
+    height: 30px;
+    width: 30px;
+    border-radius: 50%;
+    background: var(--quaternaryColor);
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1;
+    transition: transform 0.3s ease-in-out, background 100ms ease-in-out;
+
+    &:hover {
+      background: var(--quinaryColor);
+    }
+
+    svg {
+      width: 0.5em;
+      fill: var(--secondaryTextColor);
+    }
+  }
+}

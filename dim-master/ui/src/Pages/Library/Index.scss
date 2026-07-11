@@ -1,0 +1,48 @@
+.library {
+  display: flex;
+  flex-direction: column;
+
+  & > .match-media {
+    overflow: hidden;
+    padding: 33px;
+    grid-column-start: 1;
+    grid-column-end: 3;
+  }
+}
+
+@media only screen and (min-width: 720px) {
+  .library {
+    & > .match-media {
+      &.open-true {
+        height: 46vh;
+      }
+
+      &.open-false {
+        height: 114px;
+      }
+    }
+  }
+}
+
+@media only screen and (max-height: 720px) {
+  .library {
+    & > .match-media {
+      &.open-true {
+        height: 70vh;
+        padding: 60px 90px;
+      }
+
+      &.open-false {
+        height: 27vh;
+      }
+    }
+  }
+}
+
+@media only screen and (min-width: 1080px) {
+  .match-media {
+    &.open-true {
+      padding: 60px 90px;
+    }
+  }
+}

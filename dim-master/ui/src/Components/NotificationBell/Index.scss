@@ -1,0 +1,182 @@
+.notificationBell {
+  position: relative;
+
+  .bellButton {
+    position: relative;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 0.5em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    svg {
+      width: 18px;
+      height: 18px;
+      fill: var(--primaryTextColor);
+      transition: fill 0.15s;
+    }
+
+    &:hover svg {
+      fill: var(--accentColor);
+    }
+  }
+
+  .badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    background: #e53935;
+    color: #fff;
+    font-size: 10px;
+    font-family: "Roboto Bold", Arial;
+    min-width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    line-height: 1;
+  }
+
+  .notificationDropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 320px;
+    max-height: 400px;
+    background: var(--tertiaryColor);
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    animation: dropdownAppear 0.15s ease-out;
+
+    .dropdownHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--quaternaryColor);
+
+      h4 {
+        margin: 0;
+        font-family: "Roboto Bold", Arial;
+        color: var(--primaryTextColor);
+      }
+
+      .markAllRead {
+        background: none;
+        border: none;
+        color: var(--accentColor);
+        cursor: pointer;
+        font-size: 12px;
+        font-family: "Roboto Regular", Arial;
+        padding: 0;
+
+        &:hover {
+          text-decoration: underline;
+        }
+      }
+    }
+
+    .dropdownList {
+      overflow-y: auto;
+      scrollbar-width: thin;
+      flex: 1;
+
+      .emptyState {
+        padding: 24px 16px;
+        text-align: center;
+        color: var(--tertiaryTextColor);
+        font-size: 13px;
+      }
+    }
+
+    .notificationItem {
+      display: flex;
+      align-items: flex-start;
+      padding: 10px 16px;
+      gap: 8px;
+      border-bottom: 1px solid var(--quaternaryColor);
+      transition: background 0.1s;
+
+      &:hover {
+        background: var(--secondaryColor);
+      }
+
+      &:last-child {
+        border-bottom: none;
+      }
+
+      &.clickable {
+        cursor: pointer;
+      }
+
+      .notifPoster {
+        flex-shrink: 0;
+        width: 32px;
+
+        img {
+          width: 32px;
+          height: 48px;
+          object-fit: cover;
+          border-radius: 3px;
+          display: block;
+        }
+      }
+
+      .notifContent {
+        flex: 1;
+        min-width: 0;
+
+        .notifTitle {
+          font-size: 13px;
+          font-family: "Roboto Bold", Arial;
+          color: var(--primaryTextColor);
+          margin: 0 0 2px 0;
+        }
+
+        .notifBody {
+          font-size: 12px;
+          color: var(--secondaryTextColor);
+          margin: 0 0 4px 0;
+        }
+
+        .notifTime {
+          font-size: 11px;
+          color: var(--tertiaryTextColor);
+        }
+      }
+
+      .notifDismiss {
+        background: none;
+        border: none;
+        color: var(--tertiaryTextColor);
+        cursor: pointer;
+        font-size: 18px;
+        line-height: 1;
+        padding: 0 4px;
+        flex-shrink: 0;
+
+        &:hover {
+          color: var(--primaryTextColor);
+        }
+      }
+    }
+  }
+}
+
+@keyframes dropdownAppear {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

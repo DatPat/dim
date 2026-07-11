@@ -1,0 +1,64 @@
+[package]
+name = "nightfall"
+version = "0.3.12-rc4"
+authors = ["Valerian G. <valerian.garleanu@pm.me>"]
+edition = "2018"
+license = "GPL-2.0"
+description = "Nightfall is a library allowing on-demand video transcoding and streaming."
+repository = "https://github.com/vgarleanu/nightfall"
+documentation = "https://docs.rs/nightfall"
+
+[features]
+vaapi = ["rusty_vainfo"]
+cuda = []
+qsv = []
+v4l2 = []
+ssa_transmux = []
+
+default = ["cuda", "vaapi"]
+
+[dependencies]
+uuid = { version = "1.6.1", features = ["v4"] }
+lazy_static = "1.4.0"
+serde_json = "1.0.57"
+serde = { version = "1.0.115", features = ["derive"] }
+serde_derive = "1.0.115"
+cfg-if = "1.0.0"
+err-derive = "0.3.0"
+xtra = "0.5.1"
+async-trait = "0.1.49"
+xtra_proc = "0.1.0"
+mp4 = { git = "https://github.com/vgarleanu/mp4-rust" }
+once_cell = "1.8.0"
+
+tracing = "0.1.29"
+tokio-stream = { version = "0.1.5", features = ["io-util"] }
+tokio = { version = "1.5.0", features = [
+    "process",
+    "io-util",
+    "io-std",
+    "macros",
+    "time",
+    "rt",
+] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.27.1", features = ["signal"] }
+rusty_vainfo = { version = "0.1.4", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+psutil = { version = "3.2.0", default-features = false, features = ["process"] }
+
+[dev-dependencies]
+xtra = { version = "0.5.1", features = ["tokio", "with-tokio-1"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1.5.0", features = ["full"] }
+
+[target.'cfg(windows)'.dependencies]
+ntapi = "0.4.1"
+winapi = { version = "0.3.9", features = [
+    "winerror",
+    "synchapi",
+    "minwinbase",
+    "processthreadsapi",
+] }

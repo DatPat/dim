@@ -1,0 +1,91 @@
+.mediaPage .mediaContent {
+  gap: 2em 4em;
+  display: grid;
+
+  & > .meta-content .mediaPageSeason {
+  }
+
+  & > .meta-content {
+    padding-top: 30px;
+    padding-bottom: 30px;
+    padding-left: 30px;
+  }
+
+  & > .mediaPageSeasons {
+    padding-top: 30px;
+    padding-bottom: 30px;
+    padding-right: 30px;
+  }
+
+  & > .match-media {
+    overflow: hidden;
+    padding: 30px;
+    grid-column-start: 1;
+    grid-column-end: 3;
+
+    &.open-true {
+      height: 41vh;
+    }
+
+    &.open-false {
+      height: 11vh;
+    }
+  }
+}
+
+/*
+    * == KEYFRAMES ==
+*/
+
+@keyframes imageLoaded {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes onActiveImage {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes onHideImage {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/*
+    * == MEDIA QUERIES ==
+*/
+
+@media only screen and (min-width: 1080px) {
+  .mediaPage .mediaContent {
+    grid-template-columns: auto 1fr;
+
+    & > .match-media {
+      padding: 60px 90px 0 90px;
+    }
+
+    & > .meta-content {
+      padding-top: 60px;
+      padding-bottom: 60px;
+      padding-left: 90px;
+    }
+
+    & > .mediaPageSeasons {
+      padding-top: 60px;
+      padding-bottom: 60px;
+      padding-right: 90px;
+    }
+  }
+}

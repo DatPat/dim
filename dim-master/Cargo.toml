@@ -1,0 +1,20 @@
+[workspace]
+members = [
+    "dim/",
+    "dim-core",
+    "dim-auth",
+    "dim-database",
+    "dim-events",
+    "dim-extern-api",
+    "dim-web",
+    "dim-utils",
+]
+
+[workspace.package]
+version = "0.4.0-dev"
+authors = ["Valerian G. <valerian@dusklabs.io>"]
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[profile.dev]
+codegen-units = 16

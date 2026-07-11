@@ -1,0 +1,139 @@
+.transcoderDefaults {
+  .deviceList {
+    margin-bottom: 1.5em;
+
+    .deviceListLabel {
+      font-family: "Roboto Condensed Regular", Arial;
+      color: var(--secondaryTextColor);
+      margin-bottom: 0.5em;
+    }
+
+    .noDevices {
+      color: var(--secondaryTextColor);
+      font-style: italic;
+      opacity: 0.7;
+    }
+
+    .deviceItem {
+      background: var(--tertiaryColor);
+      border-radius: 10px;
+      padding: 0.75em 1em;
+
+      &:not(:last-child) {
+        margin-bottom: 0.5em;
+      }
+
+      .deviceInfo {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.5em;
+
+        .devicePath {
+          font-family: monospace;
+          font-size: 0.9em;
+          color: var(--primaryTextColor);
+        }
+
+        .deviceVendor {
+          font-size: 0.85em;
+          color: var(--secondaryTextColor);
+        }
+      }
+
+      .deviceTags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4em;
+
+        .tag {
+          font-size: 0.8em;
+          padding: 0.2em 0.6em;
+          border-radius: 4px;
+          font-family: "Roboto Bold", Arial;
+        }
+
+        .kindTag {
+          background: var(--accentColor);
+          color: var(--primaryTextColor);
+        }
+
+        .codecTag {
+          background: var(--quaternaryColor);
+          color: var(--primaryTextColor);
+        }
+      }
+    }
+  }
+
+  .field > p {
+    font-family: "Roboto Condensed Regular", Arial;
+    color: var(--secondaryTextColor);
+    margin-bottom: 0.5em;
+  }
+
+  .field:not(:last-child) {
+    margin-bottom: 1em;
+  }
+
+  .dropdown {
+    position: relative;
+
+    .toggle {
+      display: flex;
+      transition: background 200ms ease-in-out;
+      background: var(--tertiaryColor);
+      padding: 0.5em;
+      border-radius: 10px;
+      cursor: pointer;
+
+      &:hover {
+        background: var(--quaternaryColor);
+      }
+
+      &.visible-true {
+        background: var(--quinaryColor);
+      }
+    }
+
+    .dropDownContent {
+      display: flex;
+      justify-content: center;
+      flex-direction: column;
+      background: var(--tertiaryColor);
+      position: absolute;
+      top: calc(100% + 0.5em);
+      left: 0;
+      right: 0;
+      white-space: nowrap;
+      z-index: 1;
+      border-radius: 10px;
+      pointer-events: none;
+      opacity: 0;
+      overflow: hidden;
+      transition: opacity 150ms ease-in-out;
+      box-shadow: -2px 2px 4px #1a1a1a;
+
+      &.visible-true {
+        pointer-events: unset;
+        opacity: 1;
+      }
+
+      button {
+        display: flex;
+        gap: 2em;
+        justify-content: space-between;
+        font-family: "Roboto Bold", Arial;
+        color: var(--primaryTextColor);
+        background: var(--tertiaryColor);
+        align-items: center;
+        padding: 1em;
+        width: 100%;
+
+        &:hover {
+          background: var(--quaternaryColor);
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+.appLoad {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100%;
+  flex-direction: column;
+  gap: 2em;
+  color: var(--primaryTextColor);
+
+  svg {
+    width: 10em;
+    overflow: unset;
+  }
+
+  .barLoad {
+    width: 5em;
+  }
+
+  .error {
+    animation: appear 200ms ease-in-out;
+    text-align: center;
+  }
+
+  p {
+    margin-top: 0.5em;
+    color: var(--tertiaryTextColor);
+  }
+
+  button {
+    margin-top: 1em;
+    padding: 0.8em;
+    transition: 0.2s ease-in-out;
+    transition-property: filter, background;
+    filter: saturate(0.7);
+    font-family: "Roboto Bold", Arial;
+    border-radius: 10px;
+    background: var(--accentColor);
+    outline: none;
+    cursor: pointer;
+    color: var(--accentTextColor);
+    font-size: 1em;
+
+    &:focus,
+    &:hover {
+      filter: saturate(1);
+    }
+
+    p {
+      padding: 0.5em 0.8em;
+      background: var(--accentColor);
+    }
+  }
+}

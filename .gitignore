@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Source snapshots
+*.zip
+
+# Local tooling / unrelated projects
+.claude/
+dim-android/
+gitinit.ps1
+gitpush.ps1
+syncplay-test.py
+syncplay-guest-test.py
+
+# Build artifacts (safety net — subprojects have their own ignores too)
+**/target/
+**/node_modules/
+dim-master/ui/build/
+dim-master/logs/
+dim-master/config/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal

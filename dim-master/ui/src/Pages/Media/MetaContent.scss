@@ -1,0 +1,150 @@
+.metaContentErr {
+  .desc {
+    margin: 0.5em 0 1em 0;
+    color: var(--secondaryTextColor);
+  }
+
+  button {
+    display: inline-block;
+  }
+}
+
+.metaContent {
+  display: grid;
+  gap: 1em;
+  transition: padding 0.3s ease-in-out;
+
+  .horizontal-err {
+    margin-bottom: 10px;
+  }
+
+  .mediaCardImage {
+    margin-bottom: 1em;
+    width: 250px;
+    height: 350px;
+    background: var(--secondaryColor);
+    border-radius: 10px;
+
+    .imageLoad {
+      height: 100%;
+      width: 100%;
+      animation: onHideImage 0s ease-in-out forwards;
+
+      &.show-true {
+        animation: onActiveImage 300ms ease-in-out forwards;
+      }
+
+      &.show-false {
+        animation: onHideImage 300ms ease-in-out forwards;
+      }
+
+      img {
+        border-radius: 10px;
+        height: 100%;
+        width: 100%;
+        object-fit: cover;
+      }
+    }
+  }
+
+  .title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    justify-content: space-between;
+    max-width: 60ch;
+
+    h1 {
+      font-family: "Roboto Bold", Arial;
+    }
+  }
+
+  h4 {
+    font-family: "Roboto Condensed Regular", Arial;
+  }
+
+  // YEAR + GENRE
+  .genres {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5em 0;
+
+    // SEPARATOR
+    svg {
+      margin: 0 10px;
+      font-size: 0.4em;
+      fill: var(--accentColor);
+    }
+
+    a {
+      color: var(--secondaryTextColor);
+      transition: color 0.2s ease-in-out;
+
+      &:hover {
+        color: var(--primaryTextColor);
+      }
+
+      // NOT YEAR
+      &:not(:first-child) {
+        margin: 0 15px 0 0;
+      }
+    }
+  }
+
+  .description {
+    line-height: 2em;
+    max-width: 60ch;
+  }
+
+  .separator {
+    margin: 0;
+    max-width: 60ch;
+  }
+
+  .meta-info {
+    max-width: 60ch;
+    display: grid;
+    gap: 1em;
+
+    h4 {
+      margin-bottom: 5px;
+    }
+
+    .info {
+      background: var(--secondaryColor);
+      border-radius: 10px;
+      padding: 1em;
+    }
+
+    .length {
+      text-align: center;
+
+      // value
+      p:nth-child(1) {
+        margin-bottom: 5px;
+        letter-spacing: 1px;
+      }
+
+      /* hint */
+      p:nth-child(2) {
+        color: #5a5a5a;
+        font-size: 0.7em;
+      }
+    }
+  }
+}
+
+/*
+    * == MEDIA QUERIES ==
+*/
+
+@media only screen and (min-width: 300px) {
+  .metaContent .meta-info {
+    grid-template-columns: 1fr 1fr;
+    gap: 1em;
+  }
+}
+
+@media only screen and (min-width: 1080px) {
+}
