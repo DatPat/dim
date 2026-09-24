@@ -30,7 +30,9 @@ function ExternalSyncController() {
   const isGuest = useSelector((store) => store.watchTogether.externalIsGuest);
   const video = useSelector((store) => store.video);
   const syncCtx = useExternalSync();
-  const { clientRef, onStateUpdate } = syncCtx || {};
+  // `client` (not clientRef) drives effect re-runs: it is null until the
+  // provider connects, which can happen after our effects first run.
+  const { clientRef, client, onStateUpdate } = syncCtx || {};
 
   const reportIntervalRef = useRef(null);
   const params = useParams();
@@ -68,9 +70,6 @@ function ExternalSyncController() {
       return;
     }
 
-    const connectedAt = Date.now();
-    const GRACE_MS = 3000;
-
     const unsubscribe = onStateUpdate((position, paused, doSeek) => {
       // Always track the latest host state (used for guest autoplay on canplay)
       hostStateRef.current = { position, paused };
@@ -88,16 +87,6 @@ function ExternalSyncController() {
       const localPos = videoRef.current.currentTime;
       const localPaused = videoRef.current.paused;
 
-      // Grace period — ignore early server states with position=0
-      if (Date.now() - connectedAt < GRACE_MS && position < 1) {
-        return;
-      }
-
-      // Never seek backward to near-zero once we've moved past the start.
-      if (position < 1 && localPos > 2) {
-        return;
-      }
-
       // Suppress outgoing reports
       suppressUntilRef.current = Date.now() + 2000;
 
@@ -105,10 +94,16 @@ function ExternalSyncController() {
         p.seek(position);
       }
 
+      if (paused) {
+        // Drift correction only applies while playing.
+        videoRef.current.playbackRate = 1.0;
+      }
+
       if (paused && !localPaused) {
         videoRef.current.pause();
         p.seek(position);
       } else if (!paused && localPaused) {
+        videoRef.current.playbackRate = 1.0;
         p.seek(position);
         videoRef.current.play().catch(() => {
           videoRef.current.muted = true;
@@ -139,6 +134,14 @@ function ExternalSyncController() {
   useEffect(() => {
     if (!isGuest || !videoRef?.current) return;
     videoRef.current.muted = true;
+  }, [isGuest, videoRef]);
+
+  // A guest's drift-correction rate must not survive becoming the host (or
+  // leaving the session) — the host plays at normal speed.
+  useEffect(() => {
+    const element = videoRef?.current;
+    if (!isGuest || !element) return;
+    return () => { element.playbackRate = 1.0; };
   }, [isGuest, videoRef]);
 
   // Auto-play when the player becomes ready (canPlay) and the host is playing.
@@ -180,6 +183,8 @@ function ExternalSyncController() {
   useEffect(() => {
     if (!externalSync || isGuest) return;
 
+    const element = videoRef?.current;
+
     reportIntervalRef.current = setInterval(() => {
       if (!videoRef?.current || !clientRef.current) return;
 
@@ -195,9 +200,7 @@ function ExternalSyncController() {
         clearInterval(reportIntervalRef.current);
         reportIntervalRef.current = null;
       }
-      if (videoRef?.current) {
-        videoRef.current.playbackRate = 1.0;
-      }
+      if (element) element.playbackRate = 1.0;
     };
   }, [externalSync, isGuest, clientRef, videoRef]);
 
@@ -206,7 +209,7 @@ function ExternalSyncController() {
   // clients to have a file set to stay connected. For guests, we send
   // the file WITHOUT the [dim:] tag so we don't get mistaken for the host.
   useEffect(() => {
-    if (!clientRef.current || !currentFile) return;
+    if (!client || !currentFile) return;
 
     const fileName = currentFile.target_file.split(/\/|\\/g).pop() || "Unknown";
     const duration = currentFile.duration || 0;
@@ -214,17 +217,17 @@ function ExternalSyncController() {
       // Guest: announce the file WITHOUT marking ourselves host — a guest
       // that flips to host stops following the real host and echoes stale
       // state (position 0, paused) forever.
-      clientRef.current.setFile(fileName, duration, 0, 0, false);
+      client.setFile(fileName, duration, 0, 0, false);
     } else {
       // Host: send with dim tag so guests can find the file
-      clientRef.current.setFile(fileName, duration, 0, fileID, true);
+      client.setFile(fileName, duration, 0, fileID, true);
     }
-  }, [clientRef, currentFile, fileID, isGuest]);
+  }, [client, currentFile, fileID, isGuest]);
 
   // For guests: block user-initiated play/pause from propagating to server.
   // Only the host forwards native video events as authoritative state.
   useEffect(() => {
-    if (!videoRef?.current || !clientRef.current || !externalSync) return;
+    if (!videoRef?.current || !client || !externalSync) return;
     if (isGuest) return;
 
     const vid = videoRef.current;
@@ -233,14 +236,14 @@ function ExternalSyncController() {
       if (Date.now() < suppressUntilRef.current) return;
       const pos = vid.currentTime;
       if (pos < 0.5) return;
-      clientRef.current?.reportState(pos, false, false);
+      client.reportState(pos, false, false);
     };
 
     const onPause = () => {
       if (Date.now() < suppressUntilRef.current) return;
       const pos = vid.currentTime;
       if (pos < 0.5) return;
-      clientRef.current?.reportState(pos, true, false);
+      client.reportState(pos, true, false);
     };
 
     // Host seeks MUST be reported with doSeek — the server ignores large
@@ -249,7 +252,7 @@ function ExternalSyncController() {
     // seek never reaches the room.
     const onSeeked = () => {
       if (Date.now() < suppressUntilRef.current) return;
-      clientRef.current?.reportState(vid.currentTime, vid.paused, true);
+      client.reportState(vid.currentTime, vid.paused, true);
     };
 
     vid.addEventListener("play", onPlay);
@@ -261,7 +264,7 @@ function ExternalSyncController() {
       vid.removeEventListener("pause", onPause);
       vid.removeEventListener("seeked", onSeeked);
     };
-  }, [videoRef, clientRef, externalSync, isGuest]);
+  }, [videoRef, client, externalSync, isGuest]);
 
   return null;
 }

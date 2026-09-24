@@ -29,15 +29,63 @@ pub struct ReadyBody {
 }
 
 #[derive(Deserialize)]
+pub struct ChangeMediaBody {
+    pub expected_media_file_id: i64,
+    pub media_file_id: i64,
+}
+
+pub async fn change_media(
+    State(AppState {
+        watch_together,
+        conn,
+        ..
+    }): State<AppState>,
+    Extension(user): Extension<User>,
+    Path(code): Path<String>,
+    Json(body): Json<ChangeMediaBody>,
+) -> Result<Json<dim_core::sync_engine::RoomInfo>, (StatusCode, String)> {
+    let mut tx = conn.read().begin().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let file = dim_database::mediafile::MediaFile::get_one(&mut tx, body.media_file_id)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Media file not found".to_string()))?;
+    let media_id = file
+        .media_id
+        .ok_or((StatusCode::BAD_REQUEST, "Media file has no media".to_string()))?;
+    let media = dim_database::media::Media::get(&mut tx, media_id)
+        .await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Media not found".to_string()))?;
+    let (info, notifications) = watch_together
+        .engine()
+        .change_media(
+            dim_core::sync_engine::ParticipantId::DimUser(user.id.0),
+            &code,
+            body.expected_media_file_id,
+            file.id,
+            media_id,
+            media.name,
+        )
+        .await
+        .map_err(|e| (
+            match e {
+                "Room not found" => StatusCode::NOT_FOUND,
+                "Room media has changed" => StatusCode::CONFLICT,
+                _ => StatusCode::FORBIDDEN,
+            },
+            e.to_string(),
+        ))?;
+    watch_together.engine().dispatch(notifications).await;
+    Ok(Json(info))
+}
+
+#[derive(Deserialize)]
 pub struct JoinRoomBody {
     #[serde(default)]
     pub password: Option<String>,
 }
 
 pub async fn create_room(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Extension(user): Extension<User>,
     Json(body): Json<CreateRoomBody>,
 ) -> impl IntoResponse {
@@ -64,9 +112,7 @@ pub async fn create_room(
 }
 
 pub async fn join_room(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Extension(user): Extension<User>,
     Path(code): Path<String>,
     body: Option<Json<JoinRoomBody>>,
@@ -83,14 +129,19 @@ pub async fn join_room(
         .await
     {
         Ok(info) => Ok(Json(info)),
-        Err(e) => Err((StatusCode::NOT_FOUND, e.to_string())),
+        Err(e) => Err((
+            if e == "Invalid password" {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::NOT_FOUND
+            },
+            e.to_string(),
+        )),
     }
 }
 
 pub async fn leave_room(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Extension(user): Extension<User>,
     Path(code): Path<String>,
 ) -> impl IntoResponse {
@@ -101,17 +152,13 @@ pub async fn leave_room(
 }
 
 pub async fn list_rooms(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
 ) -> impl IntoResponse {
     Json(watch_together.list_rooms().await)
 }
 
 pub async fn get_room(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Path(code): Path<String>,
 ) -> impl IntoResponse {
     match watch_together.get_room_info(&code).await {
@@ -121,23 +168,22 @@ pub async fn get_room(
 }
 
 pub async fn set_ready(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Extension(user): Extension<User>,
     Path(code): Path<String>,
     Json(body): Json<ReadyBody>,
 ) -> impl IntoResponse {
-    match watch_together.set_ready(&code, user.id.0, body.is_ready).await {
+    match watch_together
+        .set_ready(&code, user.id.0, body.is_ready)
+        .await
+    {
         Ok(()) => Ok(StatusCode::OK),
         Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
     }
 }
 
 pub async fn transfer_host(
-    State(AppState {
-        watch_together, ..
-    }): State<AppState>,
+    State(AppState { watch_together, .. }): State<AppState>,
     Extension(user): Extension<User>,
     Path(code): Path<String>,
     Json(body): Json<TransferHostBody>,

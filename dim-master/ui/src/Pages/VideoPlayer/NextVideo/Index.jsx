@@ -19,7 +19,7 @@ function NextVideo(props) {
 
   return (
     <div className={`nextVideoOverlay ${visibile}`}>
-      <SelectMediaFile mediaID={id}>
+      <SelectMediaFile mediaID={id} onSelectFile={props.onSelectFile}>
         <SelectMediaFilePlayButton label="Next Episode" hideIcon={true} />
       </SelectMediaFile>
     </div>

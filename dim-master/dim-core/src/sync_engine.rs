@@ -13,11 +13,22 @@ const ROOM_CODE_CHARS: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LEN: usize = 6;
 const MAX_CHAT_MESSAGES: usize = 200;
 
+#[cfg(test)]
+#[path = "sync_engine_tests.rs"]
+mod tests;
+
 /// A controlling client's position report within this many seconds of the
 /// room's computed position is treated as normal playback drift and adopted;
 /// larger gaps without an explicit seek are ignored (the client converges to
 /// the authoritative position instead).
 const DRIFT_ADOPT_THRESHOLD_SECS: f64 = 4.0;
+
+/// After a participant other than the host changes playback, the host's
+/// periodic element reports are ignored for this long. A report the host sent
+/// before it received the command is stale and would otherwise undo it (e.g.
+/// flip a guest's pause back to playing). Browser hosts stop reporting for 3s
+/// after applying a remote command, so no fresh report is lost.
+const HOST_REPORT_HOLDOFF: std::time::Duration = std::time::Duration::from_secs(2);
 
 fn generate_room_code() -> String {
     let mut rng = rand::thread_rng();
@@ -70,13 +81,8 @@ impl PlaybackState {
 
 #[derive(Debug, Clone)]
 pub enum ParticipantKind {
-    DimUser {
-        user_id: i64,
-        picture: Option<i64>,
-    },
-    SyncplayClient {
-        conn_id: u64,
-    },
+    DimUser { user_id: i64, picture: Option<i64> },
+    SyncplayClient { conn_id: u64 },
 }
 
 /// Unique identifier for a participant (works for both Dim users and Syncplay clients).
@@ -164,9 +170,18 @@ pub struct SyncRoom {
     pub last_position_update: Instant,
     pub participants: Vec<SyncParticipant>,
     pub chat_messages: Vec<ChatMessage>,
+    /// See `HOST_REPORT_HOLDOFF`.
+    pub host_report_holdoff_until: Option<Instant>,
 }
 
 impl SyncRoom {
+    /// Called when a non-host participant changed playback state.
+    fn hold_off_host_reports(&mut self, actor: ParticipantId) {
+        if self.host_id() != Some(actor) {
+            self.host_report_holdoff_until = Some(Instant::now() + HOST_REPORT_HOLDOFF);
+        }
+    }
+
     pub fn current_position(&self) -> f64 {
         match self.playback_state {
             PlaybackState::Playing => {
@@ -187,7 +202,10 @@ impl SyncRoom {
     }
 
     fn to_wt_participants(&self) -> Vec<dim_events::WtParticipant> {
-        self.participants.iter().map(|p| p.to_wt_participant()).collect()
+        self.participants
+            .iter()
+            .map(|p| p.to_wt_participant())
+            .collect()
     }
 
     fn host_id(&self) -> Option<ParticipantId> {
@@ -443,10 +461,7 @@ fn participant_file_json(p: &SyncParticipant) -> serde_json::Value {
 /// clients expect: `{"Set":{"user":{"<name>":{"room":{"name":..},"event":{..},"file":{..}}}}}`.
 fn make_syncplay_user_event(room: &SyncRoom, p: &SyncParticipant, event: Option<&str>) -> String {
     let mut user_obj = serde_json::Map::new();
-    user_obj.insert(
-        "room".into(),
-        serde_json::json!({ "name": room.name }),
-    );
+    user_obj.insert("room".into(), serde_json::json!({ "name": room.name }));
     if let Some(ev) = event {
         user_obj.insert("event".into(), serde_json::json!({ ev: true }));
     }
@@ -505,8 +520,9 @@ fn make_syncplay_ready(username: &str, is_ready: bool) -> String {
 #[derive(Debug, Default)]
 struct EngineState {
     rooms: HashMap<String, SyncRoom>,
-    /// Maps Dim user_id to their WebSocket SocketAddr for targeted messaging.
-    user_addrs: HashMap<i64, SocketAddr>,
+    /// Maps Dim user_id to every WebSocket the user has open (one per tab)
+    /// for targeted messaging.
+    user_addrs: HashMap<i64, Vec<SocketAddr>>,
     /// Maps Syncplay room name → Dim room code.
     room_name_aliases: HashMap<String, String>,
     /// Counter for generating unique Syncplay connection IDs.
@@ -517,7 +533,7 @@ struct EngineState {
 
 /// Build a WS notification for the room's Dim participants.
 fn ws_broadcast_to_room(
-    user_addrs: &HashMap<i64, SocketAddr>,
+    user_addrs: &HashMap<i64, Vec<SocketAddr>>,
     room: &SyncRoom,
     ws_message: &str,
     exclude: Option<ParticipantId>,
@@ -529,7 +545,9 @@ fn ws_broadcast_to_room(
             matches!(p.kind, ParticipantKind::DimUser { .. })
                 && exclude.map_or(true, |ex| p.id != ex)
         })
-        .filter_map(|p| user_addrs.get(&p.user_id()).copied())
+        .filter_map(|p| user_addrs.get(&p.user_id()))
+        .flatten()
+        .copied()
         .collect();
 
     if ws_addrs.is_empty() {
@@ -617,7 +635,11 @@ impl SyncEngine {
     }
 
     pub async fn register_user_addr(&self, user_id: i64, addr: SocketAddr) {
-        self.state.write().await.user_addrs.insert(user_id, addr);
+        let mut state = self.state.write().await;
+        let addrs = state.user_addrs.entry(user_id).or_default();
+        if !addrs.contains(&addr) {
+            addrs.push(addr);
+        }
     }
 
     pub async fn unregister_user_addr(&self, user_id: i64) {
@@ -736,7 +758,10 @@ impl SyncEngine {
             participant.display_name.clone(),
             participant.kind.clone(),
             Some(ControlMode::Egalitarian),
-            password.map(|s| s.to_string()),
+            // The Hello password is the SERVER password (already checked by
+            // the transport) — never make it a room password, or web users
+            // would have to type its MD5 digest to join.
+            None,
             Some(room_name.to_string()),
         );
         let code = info.code.clone();
@@ -779,7 +804,9 @@ impl SyncEngine {
         to_id: ParticipantId,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
         if room.host_id() != Some(from_id) {
@@ -807,7 +834,9 @@ impl SyncEngine {
         position: f64,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
         if !room.can_control(participant_id) {
@@ -831,6 +860,7 @@ impl SyncEngine {
             }
             _ => return Err("Invalid action"),
         }
+        room.hold_off_host_reports(participant_id);
 
         // Exclude the sender — they already applied the action locally.
         // Echoing it back causes a feedback loop: the sender would seek
@@ -841,8 +871,7 @@ impl SyncEngine {
         // Notify Syncplay TCP clients (except the sender, if the sender is
         // one). A "seek" must carry doSeek so clients hard-jump.
         let set_by = room.participant_name(participant_id);
-        let sp_state =
-            make_syncplay_state_message(room, action == "seek", set_by.as_deref());
+        let sp_state = make_syncplay_state_message(room, action == "seek", set_by.as_deref());
         notifs.extend(sp_broadcast_to_room(room, sp_state, Some(participant_id)));
 
         Ok(notifs)
@@ -863,11 +892,17 @@ impl SyncEngine {
         latency_ms: u32,
     ) -> Result<(RoomPlaybackSnapshot, Vec<SyncNotification>), &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
         // Update participant latency
-        if let Some(p) = room.participants.iter_mut().find(|p| p.id == participant_id) {
+        if let Some(p) = room
+            .participants
+            .iter_mut()
+            .find(|p| p.id == participant_id)
+        {
             p.latency_ms = latency_ms;
         }
 
@@ -900,8 +935,13 @@ impl SyncEngine {
                 }
 
                 if pause_toggled || do_seek {
+                    room.hold_off_host_reports(participant_id);
                     let action = if pause_toggled {
-                        if paused { "pause" } else { "play" }
+                        if paused {
+                            "pause"
+                        } else {
+                            "play"
+                        }
                     } else {
                         "seek"
                     };
@@ -915,8 +955,7 @@ impl SyncEngine {
                         Some(participant_id),
                     ));
 
-                    let sp_state =
-                        make_syncplay_state_message(room, do_seek, set_by.as_deref());
+                    let sp_state = make_syncplay_state_message(room, do_seek, set_by.as_deref());
                     notifs.extend(sp_broadcast_to_room(room, sp_state, Some(participant_id)));
                 }
             }
@@ -932,6 +971,107 @@ impl SyncEngine {
 
     // ----- File info -----
 
+    /// Browser hosts periodically report the element's actual position. Unlike
+    /// user actions, these reports never broadcast a seek or echo to the host.
+    /// `paused` includes a stalled/ended element so guests wait for the host.
+    pub async fn report_host_state(
+        &self,
+        participant_id: ParticipantId,
+        code: &str,
+        position: f64,
+        paused: bool,
+        media_file_id: Option<i64>,
+    ) -> Result<Vec<SyncNotification>, &'static str> {
+        if !position.is_finite() || position < 0.0 {
+            return Err("Invalid position");
+        }
+        let mut state = self.state.write().await;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
+        let room = rooms.get_mut(code).ok_or("Room not found")?;
+        if room.host_id() != Some(participant_id) {
+            return Err("Only the host can report playback");
+        }
+        if media_file_id.is_some() && room.media_file_id != media_file_id {
+            return Err("Room media has changed");
+        }
+        if room
+            .host_report_holdoff_until
+            .is_some_and(|until| Instant::now() < until)
+        {
+            // Possibly sent before the host saw another participant's command.
+            return Ok(vec![]);
+        }
+        let changed = paused != (room.playback_state == PlaybackState::Paused);
+        room.playback_position = position;
+        room.last_position_update = Instant::now();
+        room.playback_state = if paused {
+            PlaybackState::Paused
+        } else {
+            PlaybackState::Playing
+        };
+        if !changed {
+            return Ok(vec![]);
+        }
+        let action = if paused { "pause" } else { "play" };
+        let msg = make_sync_message(code, action, position);
+        let mut notifs = ws_broadcast_to_room(user_addrs, room, &msg, Some(participant_id));
+        let name = room.participant_name(participant_id);
+        notifs.extend(sp_broadcast_to_room(
+            room,
+            make_syncplay_state_message(room, false, name.as_deref()),
+            Some(participant_id),
+        ));
+        Ok(notifs)
+    }
+
+    /// Move an existing room to another episode without changing membership.
+    /// The expected file makes duplicate or delayed autoplay requests harmless.
+    pub async fn change_media(
+        &self,
+        participant_id: ParticipantId,
+        code: &str,
+        expected_media_file_id: i64,
+        media_file_id: i64,
+        media_id: i64,
+        media_name: String,
+    ) -> Result<(RoomInfo, Vec<SyncNotification>), &'static str> {
+        let mut state = self.state.write().await;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
+        let room = rooms.get_mut(code).ok_or("Room not found")?;
+        if room.host_id() != Some(participant_id) {
+            return Err("Only the host can change the episode");
+        }
+        if room.media_file_id != Some(expected_media_file_id) {
+            return Err("Room media has changed");
+        }
+        room.media_file_id = Some(media_file_id);
+        room.media_id = Some(media_id);
+        room.media_name = media_name;
+        // Start paused: nobody has the new episode loaded yet, so a "playing"
+        // clock would run ahead of every viewer. The host's first element
+        // report (once its player autoplays) starts the room.
+        room.playback_position = 0.0;
+        room.playback_state = PlaybackState::Paused;
+        room.last_position_update = Instant::now();
+        room.host_report_holdoff_until = None;
+        for participant in &mut room.participants {
+            participant.is_buffering = false;
+        }
+        let mut notifs =
+            ws_broadcast_to_room(user_addrs, room, &make_room_update_message(room), None);
+        let name = room.participant_name(participant_id);
+        notifs.extend(sp_broadcast_to_room(
+            room,
+            make_syncplay_state_message(room, true, name.as_deref()),
+            Some(participant_id),
+        ));
+        Ok((room.to_info(), notifs))
+    }
+
     pub async fn set_file(
         &self,
         participant_id: ParticipantId,
@@ -939,10 +1079,16 @@ impl SyncEngine {
         file: ParticipantFile,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
-        if let Some(p) = room.participants.iter_mut().find(|p| p.id == participant_id) {
+        if let Some(p) = room
+            .participants
+            .iter_mut()
+            .find(|p| p.id == participant_id)
+        {
             p.file = Some(file);
         } else {
             return Err("User not in room");
@@ -973,10 +1119,15 @@ impl SyncEngine {
         is_buffering: bool,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
-        let user_id = if let Some(p) = room.participants.iter_mut().find(|p| p.id == participant_id)
+        let user_id = if let Some(p) = room
+            .participants
+            .iter_mut()
+            .find(|p| p.id == participant_id)
         {
             p.is_buffering = is_buffering;
             p.user_id()
@@ -1002,7 +1153,9 @@ impl SyncEngine {
         text: String,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
         let user_id = match room.participants.iter().find(|p| p.id == participant_id) {
@@ -1040,16 +1193,21 @@ impl SyncEngine {
         is_ready: bool,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
-        let (user_id, username) =
-            if let Some(p) = room.participants.iter_mut().find(|p| p.id == participant_id) {
-                p.is_ready = is_ready;
-                (p.user_id(), p.display_name.clone())
-            } else {
-                return Err("User not in room");
-            };
+        let (user_id, username) = if let Some(p) = room
+            .participants
+            .iter_mut()
+            .find(|p| p.id == participant_id)
+        {
+            p.is_ready = is_ready;
+            (p.user_id(), p.display_name.clone())
+        } else {
+            return Err("User not in room");
+        };
 
         let ws_msg = make_ready_message(code, user_id, &username, is_ready);
         let mut notifs = ws_broadcast_to_room(user_addrs, room, &ws_msg, None);
@@ -1069,7 +1227,9 @@ impl SyncEngine {
         mode: ControlMode,
     ) -> Result<Vec<SyncNotification>, &'static str> {
         let mut state = self.state.write().await;
-        let EngineState { rooms, user_addrs, .. } = &mut *state;
+        let EngineState {
+            rooms, user_addrs, ..
+        } = &mut *state;
         let room = rooms.get_mut(code).ok_or("Room not found")?;
 
         if room.host_id() != Some(participant_id) {
@@ -1097,18 +1257,13 @@ impl SyncEngine {
     ) -> Option<Vec<SyncNotification>> {
         let mut state = self.state.write().await;
 
-        let code = state
-            .rooms
-            .values()
-            .find(|r| r.participants.iter().any(|p| p.id == participant_id))
-            .map(|r| r.code.clone())?;
-
-        remove_participant_locked(&mut state, participant_id, &code)
+        remove_all_memberships_locked(&mut state, participant_id)
     }
 
-    /// WebSocket-scoped disconnect. Only acts when `addr` is still the
-    /// registered socket for this user — a stale socket closing after the
-    /// user reconnected must NOT kick the live connection out of the room.
+    /// WebSocket-scoped disconnect. Only removes the user from their rooms
+    /// when `addr` was their LAST open socket — a stale socket closing after
+    /// a reconnect, or an unrelated second tab closing, must NOT kick the
+    /// live connection out of the room.
     pub async fn handle_ws_disconnect(
         &self,
         user_id: i64,
@@ -1116,29 +1271,50 @@ impl SyncEngine {
     ) -> Option<Vec<SyncNotification>> {
         let mut state = self.state.write().await;
 
-        match state.user_addrs.get(&user_id) {
-            Some(current) if *current == addr => {
-                state.user_addrs.remove(&user_id);
-            }
-            // A newer socket owns this user now (reconnect), or the user was
-            // never registered — nothing to clean up.
-            _ => return None,
+        let Some(addrs) = state.user_addrs.get_mut(&user_id) else {
+            // Never registered — nothing to clean up.
+            return None;
+        };
+        let Some(idx) = addrs.iter().position(|a| *a == addr) else {
+            return None;
+        };
+        addrs.remove(idx);
+        if !addrs.is_empty() {
+            // Another socket (reconnect or second tab) is still live.
+            return None;
         }
+        state.user_addrs.remove(&user_id);
 
-        let pid = ParticipantId::DimUser(user_id);
-        let code = state
-            .rooms
-            .values()
-            .find(|r| r.participants.iter().any(|p| p.id == pid))
-            .map(|r| r.code.clone())?;
-
-        remove_participant_locked(&mut state, pid, &code)
+        remove_all_memberships_locked(&mut state, ParticipantId::DimUser(user_id))
     }
 }
 
 // ---------------------------------------------------------------------------
 // Lock-held helpers (shared by multiple engine methods)
 // ---------------------------------------------------------------------------
+
+fn remove_all_memberships_locked(
+    state: &mut EngineState,
+    participant_id: ParticipantId,
+) -> Option<Vec<SyncNotification>> {
+    let codes: Vec<_> = state
+        .rooms
+        .values()
+        .filter(|r| r.participants.iter().any(|p| p.id == participant_id))
+        .map(|r| r.code.clone())
+        .collect();
+    let mut notifs = Vec::new();
+    for code in codes {
+        if let Some(messages) = remove_participant_locked(state, participant_id, &code) {
+            notifs.extend(messages);
+        }
+    }
+    if notifs.is_empty() {
+        None
+    } else {
+        Some(notifs)
+    }
+}
 
 fn create_room_locked(
     state: &mut EngineState,
@@ -1186,6 +1362,7 @@ fn create_room_locked(
         last_position_update: Instant::now(),
         participants: vec![participant],
         chat_messages: Vec::new(),
+        host_report_holdoff_until: None,
     };
 
     let info = room.to_info();
@@ -1200,7 +1377,9 @@ fn join_room_locked(
     code: &str,
     password: Option<&str>,
 ) -> Result<(RoomInfo, Vec<SyncNotification>), &'static str> {
-    let EngineState { rooms, user_addrs, .. } = &mut *state;
+    let EngineState {
+        rooms, user_addrs, ..
+    } = &mut *state;
     let room = rooms.get_mut(code).ok_or("Room not found")?;
 
     // Check password
@@ -1284,12 +1463,22 @@ fn remove_participant_locked(
         room_name_aliases.retain(|_, v| v != code);
         rooms.remove(code);
 
-        return if notifs.is_empty() { None } else { Some(notifs) };
+        return if notifs.is_empty() {
+            None
+        } else {
+            Some(notifs)
+        };
     }
 
-    // Migrate host if needed.
+    // Migrate host if needed. Prefer a Dim user: only Dim users can change
+    // episodes or transfer host, so a Syncplay host would lock them out.
     if leaving.is_host {
-        if let Some(next) = room.participants.first_mut() {
+        let next = room
+            .participants
+            .iter()
+            .position(|p| matches!(p.kind, ParticipantKind::DimUser { .. }))
+            .unwrap_or(0);
+        if let Some(next) = room.participants.get_mut(next) {
             next.is_host = true;
         }
     }

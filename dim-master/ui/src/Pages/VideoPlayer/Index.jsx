@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router";
-import { useHistory, useLocation } from "react-router-dom";
+import { useHistory } from "react-router-dom";
 import { useDispatch, useSelector, useStore } from "react-redux";
 import { skipToken } from "@reduxjs/toolkit/query/react";
 import { MediaPlayer, Debug } from "dashjs";
@@ -14,7 +14,8 @@ import {
   clearVideoData,
 } from "../../actions/video";
 import { fetchUserSettings } from "../../actions/settings.js";
-import { joinRoom, leaveRoom } from "../../actions/watchTogether";
+import useRoomLifecycle from "./WatchTogether/useRoomLifecycle";
+import useEpisodeNavigation from "./WatchTogether/useEpisodeNavigation";
 import { useGetMediaFilesQuery, useGetMediaQuery } from "../../api/v1/media";
 import { VideoPlayerContext } from "./Context";
 import VideoEvents from "./Events";
@@ -44,11 +45,15 @@ function VideoPlayer() {
   const params = useParams();
   const dispatch = useDispatch();
   const history = useHistory();
-  const location = useLocation();
   const [player, setPlayer] = useState();
+  const manifestFileID = useRef(null);
+  const playerFileID = useRef(null);
+  const playNextFile = useEpisodeNavigation(params.fileID);
 
   const wtState = useSelector((store) => store.watchTogether);
-  const roomCodeFromUrl = new URLSearchParams(location.search).get("room");
+  useRoomLifecycle(params.fileID);
+  const activeBuiltinRoom = wtState.isInRoom && !wtState.externalSync &&
+    String(wtState.mediaFileId) === String(params.fileID);
 
   const { error, manifest, audioTracks, videoTracks, video, auth, settings } =
     useSelector((store) => ({
@@ -68,7 +73,7 @@ function VideoPlayer() {
   const videoRef = useRef(null);
 
   const { token } = auth;
-  const canBroadcast = wtState.isInRoom && wtState.roomCode &&
+  const canBroadcast = activeBuiltinRoom && wtState.roomCode &&
     (wtState.isHost || wtState.controlMode === "egalitarian");
 
   const { data: media } = useGetMediaQuery(
@@ -120,21 +125,6 @@ function VideoPlayer() {
     };
   }, [reduxStore]);
 
-  // Auto-join Watch Together room if ?room=CODE is in URL
-  useEffect(() => {
-    if (!roomCodeFromUrl || wtState.isInRoom) return;
-    dispatch(joinRoom(roomCodeFromUrl));
-  }, [roomCodeFromUrl, wtState.isInRoom, dispatch]);
-
-  // Leave room on unmount (only for built-in Watch Together, not external Syncplay)
-  useEffect(() => {
-    return () => {
-      if (wtState.isInRoom && wtState.roomCode && !wtState.externalSync) {
-        dispatch(leaveRoom(wtState.roomCode));
-      }
-    };
-  }, [wtState.isInRoom, wtState.roomCode, wtState.externalSync, dispatch]);
-
   // If playback finished, redirect to the next video
   useEffect(() => {
     if (!settings?.userSettings?.data?.enable_autoplay) return;
@@ -147,7 +137,7 @@ function VideoPlayer() {
 
     const ts_diff = video.currentTime - media.duration;
     if (video.playback_ended && ts_diff < 10) {
-      history.replace(`/play/${item.id}`, { from: history.location.pathname });
+      playNextFile(item.id);
     }
   }, [
     media,
@@ -158,6 +148,7 @@ function VideoPlayer() {
     history,
     settings,
     settings.userSettings,
+    playNextFile,
   ]);
 
   // Reset GID if play id changes so that this component loads a new video.
@@ -224,6 +215,7 @@ function VideoPlayer() {
 
       const payload = await res.json();
 
+      manifestFileID.current = params.fileID;
       dispatch(setGID(payload.gid));
 
       // Log transcode reasons for each track
@@ -346,8 +338,13 @@ function VideoPlayer() {
       videoRef.current.muted = true;
     }
 
-    // Don't autoplay if we're in a Watch Together room where the host is paused.
-    const shouldAutoplay = !(wtState.isInRoom && wtState.playbackState === "paused");
+    // Don't autoplay if we're in a Watch Together room where the host is paused
+    // — unless we are the host that just advanced the room to this episode
+    // (the room restarts paused until our player reports it playing).
+    const hostAdvancedHere = wtState.isHost &&
+      String(wtState.autoplayFileId) === String(params.fileID);
+    const shouldAutoplay = hostAdvancedHere ||
+      !(wtState.isInRoom && wtState.playbackState === "paused");
     mediaPlayer.initialize(videoRef.current, url, shouldAutoplay);
     // Keep redux in sync with the autoplay decision. The reducer's initial
     // state is `paused: false`, which is only ever corrected by dash.js
@@ -358,6 +355,7 @@ function VideoPlayer() {
     dispatch(updateVideo({ paused: !shouldAutoplay }));
     mediaPlayer.setCustomInitialTrackSelectionFunction(getInitialTrack);
 
+    playerFileID.current = manifestFileID.current;
     setPlayer(mediaPlayer);
 
     return () => {
@@ -505,7 +503,8 @@ function VideoPlayer() {
     videoPlayer,
     overlay: overlay.current,
     seekTo,
-    player,
+    player: playerFileID.current === params.fileID &&
+      (!wtState.isInRoom || wtState.externalSync || activeBuiltinRoom) ? player : null,
   };
 
   const showNextVideoAfter = (media && media.chapters?.credits) || 0;
@@ -539,8 +538,9 @@ function VideoPlayer() {
           )}
           <ChatBubbles />
           {!error && manifest.loaded && video.canPlay && <Menus />}
-          {!error && manifest.loaded && video.canPlay && nextEpisodeId && (
-            <NextVideo id={nextEpisodeId} showAfter={showNextVideoAfter} />
+          {!error && manifest.loaded && video.canPlay && nextEpisodeId &&
+            (!wtState.isInRoom || wtState.externalSync || wtState.isHost) && (
+            <NextVideo id={nextEpisodeId} showAfter={showNextVideoAfter} onSelectFile={playNextFile} />
           )}
           {!error &&
             manifest.loaded &&

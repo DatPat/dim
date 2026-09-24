@@ -210,6 +210,10 @@ fn watch_together_routes(_app: AppState) -> Router<AppState> {
             post(routes::watch_together::leave_room),
         )
         .route(
+            "/api/v1/watch-together/rooms/:code/media",
+            post(routes::watch_together::change_media),
+        )
+        .route(
             "/api/v1/watch-together/rooms/:code",
             get(routes::watch_together::get_room),
         )

@@ -13,6 +13,7 @@ import "./Index.scss";
 
 const SelectMediaFile = (props) => {
   const history = useHistory();
+  const { onSelectFile } = props;
 
   /*
     prevents data from changing if e.g. banner in the
@@ -59,6 +60,10 @@ const SelectMediaFile = (props) => {
 
     if (mediaFiles.length === 1) {
       setClicked(false);
+      if (onSelectFile) {
+        onSelectFile(mediaFiles[0].id);
+        return;
+      }
       if (
         history.location.state?.from &&
         history.location.state.from.startsWith("/play")
@@ -75,7 +80,7 @@ const SelectMediaFile = (props) => {
       setClicked(false);
       open();
     }
-  }, [clicked, currentID, history, mediaFiles, open]);
+  }, [clicked, currentID, history, mediaFiles, open, onSelectFile]);
 
   const initialValue = {
     open,
@@ -123,6 +128,11 @@ const SelectMediaFile = (props) => {
                     mediaFiles.map((file, i) => (
                       <Link
                         to={`/play/${file.id}`}
+                        onClick={onSelectFile ? (event) => {
+                          event.preventDefault();
+                          close();
+                          onSelectFile(file.id);
+                        } : undefined}
                         className="fileVersion"
                         key={i}
                       >

@@ -12,9 +12,7 @@ use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
-use crate::sync_engine::{
-    now_ms, ParticipantId, ParticipantKind, SyncEngine, SyncParticipant,
-};
+use crate::sync_engine::{now_ms, ParticipantId, ParticipantKind, SyncEngine, SyncParticipant};
 use crate::syncplay_proto::{self, ClientMessage};
 
 const SYNCPLAY_VERSION: &str = "1.7.3";
@@ -57,10 +55,7 @@ fn tag_state_with_iotf(message: &str, proto: &mut ConnProto) -> String {
     message.to_string()
 }
 
-async fn write_line(
-    writer: &mut OwnedWriteHalf,
-    line: &str,
-) -> Result<(), std::io::Error> {
+async fn write_line(writer: &mut OwnedWriteHalf, line: &str) -> Result<(), std::io::Error> {
     writer.write_all(line.as_bytes()).await?;
     writer.write_all(b"\r\n").await
 }
@@ -144,8 +139,11 @@ async fn handle_syncplay_connection(
         };
 
         if line.contains("\"TLS\"") || line.contains("startTLS") {
-            write_line(&mut writer, &serde_json::json!({"TLS": {"startTLS": "false"}}).to_string())
-                .await?;
+            write_line(
+                &mut writer,
+                &serde_json::json!({"TLS": {"startTLS": "false"}}).to_string(),
+            )
+            .await?;
             continue;
         }
 
@@ -187,15 +185,17 @@ async fn handle_syncplay_connection(
     engine.register_syncplay_conn(conn_id, tx).await;
 
     // Join or create room by name
-    let (room_code, info, join_notifs) =
-        match engine.join_room_by_name(participant, &room_name, password).await {
-            Ok(x) => x,
-            Err(e) => {
-                engine.unregister_syncplay_conn(conn_id).await;
-                write_line(&mut writer, &syncplay_proto::server_error(e)).await?;
-                return Ok(());
-            }
-        };
+    let (room_code, info, join_notifs) = match engine
+        .join_room_by_name(participant, &room_name, password)
+        .await
+    {
+        Ok(x) => x,
+        Err(e) => {
+            engine.unregister_syncplay_conn(conn_id).await;
+            write_line(&mut writer, &syncplay_proto::server_error(e)).await?;
+            return Ok(());
+        }
+    };
 
     engine.dispatch(join_notifs).await;
 
@@ -209,226 +209,273 @@ async fn handle_syncplay_connection(
         .map(|p| p.username.clone())
         .unwrap_or(username);
 
-    let mut proto = ConnProto::default();
+    // All fallible I/O after joining runs inside this future, so an error
+    // cannot skip unregistering the connection and removing its memberships.
+    let result: Result<(), Box<dyn std::error::Error + Send + Sync>> = async {
+        let mut proto = ConnProto::default();
 
-    // Send Hello response
-    let hello_resp = syncplay_proto::server_hello(&username, &room_name, SYNCPLAY_VERSION, &motd);
-    write_line(&mut writer, &hello_resp).await?;
+        // Send Hello response
+        let hello_resp = syncplay_proto::server_hello(&username, &room_name, SYNCPLAY_VERSION, &motd);
+        write_line(&mut writer, &hello_resp).await?;
 
-    // Send the initial authoritative state with doSeek so the client jumps
-    // to the room position, tagged with an IOTF counter so its stale
-    // position reports are ignored until it acknowledges.
-    {
-        let paused = info.playback_state == "paused";
-        let state_msg = serde_json::json!({
-            "State": {
-                "playstate": {
-                    "position": info.playback_position,
-                    "paused": paused,
-                    "doSeek": true
-                },
-                "ping": {
-                    "latencyCalculation": now_ms() as f64 / 1000.0,
-                    "serverRtt": 0
+        // Send the initial authoritative state with doSeek so the client jumps
+        // to the room position, tagged with an IOTF counter so its stale
+        // position reports are ignored until it acknowledges.
+        {
+            let paused = info.playback_state == "paused";
+            let state_msg = serde_json::json!({
+                "State": {
+                    "playstate": {
+                        "position": info.playback_position,
+                        "paused": paused,
+                        "doSeek": true
+                    },
+                    "ping": {
+                        "latencyCalculation": now_ms() as f64 / 1000.0,
+                        "serverRtt": 0
+                    }
                 }
-            }
-        });
-        let tagged = tag_state_with_iotf(&state_msg.to_string(), &mut proto);
-        write_line(&mut writer, &tagged).await?;
-    }
+            });
+            let tagged = tag_state_with_iotf(&state_msg.to_string(), &mut proto);
+            write_line(&mut writer, &tagged).await?;
+        }
 
-    // Send the initial user list so the client knows who's in the room.
-    if let Some(list) = engine.syncplay_list(&room_code).await {
-        write_line(&mut writer, &list).await?;
-    }
+        // Send the initial user list so the client knows who's in the room.
+        if let Some(list) = engine.syncplay_list(&room_code).await {
+            write_line(&mut writer, &list).await?;
+        }
 
-    // --- Message loop ---
-    let pid = ParticipantId::Syncplay(conn_id);
-    let code = room_code.clone();
-    let mut last_inbound = Instant::now();
+        // --- Message loop ---
+        let pid = ParticipantId::Syncplay(conn_id);
+        let code = room_code.clone();
+        let mut last_inbound = Instant::now();
 
-    loop {
-        let idle_deadline = tokio::time::sleep_until((last_inbound + IDLE_TIMEOUT).into());
+        loop {
+            let idle_deadline = tokio::time::sleep_until((last_inbound + IDLE_TIMEOUT).into());
 
-        tokio::select! {
-            biased;
+            tokio::select! {
+                biased;
 
-            // Outbound messages from engine
-            msg = rx.recv() => {
-                match msg {
-                    Some(m) => {
-                        // Server-initiated State changes must carry an
-                        // ignoringOnTheFly counter so the client's in-flight
-                        // (stale) reports don't fight the new state.
-                        let m = if m.starts_with("{\"State\"") {
-                            tag_state_with_iotf(&m, &mut proto)
-                        } else {
-                            m
-                        };
-                        write_line(&mut writer, &m).await?;
-                    }
-                    None => break, // channel closed (room destroyed)
-                }
-            }
-
-            // Inbound messages from client
-            line_result = lines.next_line() => {
-                let line = match line_result? {
-                    Some(l) => l,
-                    None => break, // connection closed
-                };
-                last_inbound = Instant::now();
-
-                let msg = match ClientMessage::parse(&line) {
-                    Some(m) => m,
-                    None => continue, // unparseable, skip
-                };
-
-                match msg {
-                    ClientMessage::State(state) => {
-                        // --- Latency bookkeeping ---
-                        let mut latency_ms = 0u32;
-                        if let Some(ping) = state.ping.as_ref() {
-                            if let Some(rtt) = ping.client_rtt {
-                                latency_ms = (rtt.max(0.0) * 1000.0) as u32;
-                            }
-                            proto.client_latency_calculation = ping.client_latency_calculation;
-                            // The client echoes our latencyCalculation
-                            // timestamp; use it to estimate server-side RTT.
-                            if let Some(echo) = ping.latency_calculation {
-                                let now_s = now_ms() as f64 / 1000.0;
-                                let rtt = now_s - echo;
-                                if rtt >= 0.0 && rtt < 30.0 {
-                                    proto.server_rtt = rtt;
-                                }
-                            }
-                        }
-
-                        // --- ignoringOnTheFly handshake ---
-                        let mut client_iotf: Option<u64> = None;
-                        if let Some(iotf) = state.ignoring_on_the_fly.as_ref() {
-                            if let Some(echo) = iotf.get("server").and_then(|v| v.as_u64()) {
-                                if echo >= proto.server_iotf {
-                                    proto.awaiting_server_echo = false;
-                                }
-                            }
-                            client_iotf = iotf.get("client").and_then(|v| v.as_u64());
-                        }
-
-                        // A playstate is only meaningful if the client isn't
-                        // still reacting to a state we pushed. A client-side
-                        // IOTF counter marks a deliberate user action, which
-                        // is always processed.
-                        let playstate = state.playstate.as_ref().and_then(|ps| {
-                            let position = ps.position?;
-                            let paused = ps.paused?;
-                            if proto.awaiting_server_echo && client_iotf.is_none() {
-                                return None;
-                            }
-                            Some((position, paused, ps.do_seek.unwrap_or(false)))
-                        });
-
-                        let Ok((snapshot, notifs)) = engine
-                            .report_state(pid, &code, playstate, latency_ms)
-                            .await
-                        else {
-                            break; // room is gone
-                        };
-
-                        engine.dispatch(notifs).await;
-
-                        // --- Personal reply (position keepalive + ping echo) ---
-                        let mut ping = serde_json::json!({
-                            "latencyCalculation": now_ms() as f64 / 1000.0,
-                            "serverRtt": proto.server_rtt
-                        });
-                        if let Some(clc) = proto.client_latency_calculation {
-                            ping["clientLatencyCalculation"] = serde_json::json!(clc);
-                        }
-
-                        let mut reply = serde_json::json!({
-                            "State": {
-                                "playstate": {
-                                    "position": snapshot.position,
-                                    "paused": snapshot.paused,
-                                    "doSeek": false
-                                },
-                                "ping": ping
-                            }
-                        });
-                        if let Some(c) = client_iotf {
-                            reply["State"]["ignoringOnTheFly"] =
-                                serde_json::json!({ "client": c });
-                        }
-                        write_line(&mut writer, &reply.to_string()).await?;
-                    }
-
-                    ClientMessage::Chat(chat) => {
-                        if let Some(text) = chat.message {
-                            if let Ok(notifs) = engine.add_chat(
-                                pid, &code, &username, text,
-                            ).await {
-                                engine.dispatch(notifs).await;
-                            }
-                        }
-                    }
-
-                    ClientMessage::Set(val) => {
-                        // Handle file info updates
-                        if let Some(file) = val.get("file") {
-                            let pf = crate::sync_engine::ParticipantFile {
-                                name: file.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                                duration: file.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                size: file.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
-                                dim_file_id: file.get("dimFileId").and_then(|v| v.as_i64()).unwrap_or(0),
+                // Outbound messages from engine
+                msg = rx.recv() => {
+                    match msg {
+                        Some(m) => {
+                            // Server-initiated State changes must carry an
+                            // ignoringOnTheFly counter so the client's in-flight
+                            // (stale) reports don't fight the new state.
+                            let m = if m.starts_with("{\"State\"") {
+                                tag_state_with_iotf(&m, &mut proto)
+                            } else {
+                                m
                             };
-                            if let Ok(notifs) = engine.set_file(pid, &code, pf).await {
-                                engine.dispatch(notifs).await;
+                            write_line(&mut writer, &m).await?;
+                        }
+                        None => break, // channel closed (room destroyed)
+                    }
+                }
+
+                // Inbound messages from client
+                line_result = lines.next_line() => {
+                    let line = match line_result? {
+                        Some(l) => l,
+                        None => break, // connection closed
+                    };
+                    last_inbound = Instant::now();
+
+                    let msg = match ClientMessage::parse(&line) {
+                        Some(m) => m,
+                        None => continue, // unparseable, skip
+                    };
+
+                    match msg {
+                        ClientMessage::State(state) => {
+                            // --- Latency bookkeeping ---
+                            let mut latency_ms = 0u32;
+                            if let Some(ping) = state.ping.as_ref() {
+                                if let Some(rtt) = ping.client_rtt {
+                                    latency_ms = (rtt.max(0.0) * 1000.0) as u32;
+                                }
+                                proto.client_latency_calculation = ping.client_latency_calculation;
+                                // The client echoes our latencyCalculation
+                                // timestamp; use it to estimate server-side RTT.
+                                if let Some(echo) = ping.latency_calculation {
+                                    let now_s = now_ms() as f64 / 1000.0;
+                                    let rtt = now_s - echo;
+                                    if rtt >= 0.0 && rtt < 30.0 {
+                                        proto.server_rtt = rtt;
+                                    }
+                                }
                             }
+
+                            // --- ignoringOnTheFly handshake ---
+                            let mut client_iotf: Option<u64> = None;
+                            if let Some(iotf) = state.ignoring_on_the_fly.as_ref() {
+                                if let Some(echo) = iotf.get("server").and_then(|v| v.as_u64()) {
+                                    if echo >= proto.server_iotf {
+                                        proto.awaiting_server_echo = false;
+                                    }
+                                }
+                                client_iotf = iotf.get("client").and_then(|v| v.as_u64());
+                            }
+
+                            // A playstate is only meaningful if the client isn't
+                            // still reacting to a state we pushed. A client-side
+                            // IOTF counter marks a deliberate user action, which
+                            // is always processed.
+                            let playstate = state.playstate.as_ref().and_then(|ps| {
+                                let position = ps.position?;
+                                let paused = ps.paused?;
+                                if proto.awaiting_server_echo && client_iotf.is_none() {
+                                    return None;
+                                }
+                                Some((position, paused, ps.do_seek.unwrap_or(false)))
+                            });
+
+                            let Ok((snapshot, notifs)) = engine
+                                .report_state(pid, &code, playstate, latency_ms)
+                                .await
+                            else {
+                                break; // room is gone
+                            };
+
+                            engine.dispatch(notifs).await;
+
+                            // --- Personal reply (position keepalive + ping echo) ---
+                            let mut ping = serde_json::json!({
+                                "latencyCalculation": now_ms() as f64 / 1000.0,
+                                "serverRtt": proto.server_rtt
+                            });
+                            if let Some(clc) = proto.client_latency_calculation {
+                                ping["clientLatencyCalculation"] = serde_json::json!(clc);
+                            }
+
+                            let mut reply = serde_json::json!({
+                                "State": {
+                                    "playstate": {
+                                        "position": snapshot.position,
+                                        "paused": snapshot.paused,
+                                        "doSeek": false
+                                    },
+                                    "ping": ping
+                                }
+                            });
+                            if let Some(c) = client_iotf {
+                                reply["State"]["ignoringOnTheFly"] =
+                                    serde_json::json!({ "client": c });
+                            }
+                            write_line(&mut writer, &reply.to_string()).await?;
                         }
 
-                        // Handle readiness updates. Official clients send
-                        // {"Set": {"ready": {"isReady": bool, "manuallyInitiated": bool}}}.
-                        if let Some(ready) = val.get("ready") {
-                            let is_ready = ready
-                                .get("isReady")
-                                .and_then(|v| v.as_bool())
-                                // Tolerate the legacy {"<username>": bool} shape.
-                                .or_else(|| ready.get(&username).and_then(|v| v.as_bool()));
-
-                            if let Some(r) = is_ready {
-                                if let Ok(notifs) = engine.set_ready(pid, &code, r).await {
+                        ClientMessage::Chat(chat) => {
+                            if let Some(text) = chat.message {
+                                if let Ok(notifs) = engine.add_chat(
+                                    pid, &code, &username, text,
+                                ).await {
                                     engine.dispatch(notifs).await;
                                 }
                             }
                         }
-                    }
 
-                    ClientMessage::List(_) => {
-                        if let Some(list) = engine.syncplay_list(&code).await {
-                            write_line(&mut writer, &list).await?;
+                        ClientMessage::Set(val) => {
+                            // Handle file info updates
+                            if let Some(file) = val.get("file") {
+                                let pf = crate::sync_engine::ParticipantFile {
+                                    name: file.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                                    duration: file.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                    size: file.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+                                    dim_file_id: file.get("dimFileId").and_then(|v| v.as_i64()).unwrap_or(0),
+                                };
+                                if let Ok(notifs) = engine.set_file(pid, &code, pf).await {
+                                    engine.dispatch(notifs).await;
+                                }
+                            }
+
+                            // Handle readiness updates. Official clients send
+                            // {"Set": {"ready": {"isReady": bool, "manuallyInitiated": bool}}}.
+                            if let Some(ready) = val.get("ready") {
+                                let is_ready = ready
+                                    .get("isReady")
+                                    .and_then(|v| v.as_bool())
+                                    // Tolerate the legacy {"<username>": bool} shape.
+                                    .or_else(|| ready.get(&username).and_then(|v| v.as_bool()));
+
+                                if let Some(r) = is_ready {
+                                    if let Ok(notifs) = engine.set_ready(pid, &code, r).await {
+                                        engine.dispatch(notifs).await;
+                                    }
+                                }
+                            }
+                        }
+
+                        ClientMessage::List(_) => {
+                            if let Some(list) = engine.syncplay_list(&code).await {
+                                write_line(&mut writer, &list).await?;
+                            }
+                        }
+
+                        ClientMessage::Hello(_) => {
+                            // Already handshaked, ignore
                         }
                     }
+                }
 
-                    ClientMessage::Hello(_) => {
-                        // Already handshaked, ignore
-                    }
+                // Half-open connection guard: no inbound traffic for too long.
+                _ = idle_deadline => {
+                    tracing::debug!(conn_id, "Syncplay connection idle timeout");
+                    break;
                 }
             }
-
-            // Half-open connection guard: no inbound traffic for too long.
-            _ = idle_deadline => {
-                tracing::debug!(conn_id, "Syncplay connection idle timeout");
-                break;
-            }
         }
-    }
 
-    // --- Cleanup ---
+        Ok(())
+    }.await;
+
+    // --- Cleanup (including failed writes and connection resets) ---
     engine.unregister_syncplay_conn(conn_id).await;
-    if let Some(notifs) = engine.handle_disconnect(pid).await {
+    if let Some(notifs) = engine
+        .handle_disconnect(ParticipantId::Syncplay(conn_id))
+        .await
+    {
         engine.dispatch(notifs).await;
     }
 
-    Ok(())
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_error_after_join_still_removes_the_room() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let engine = SyncEngine::default();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server_engine = engine.clone();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                handle_syncplay_connection(stream, server_engine, String::new(), String::new())
+                    .await
+            });
+            let client = TcpStream::connect(addr).await.unwrap();
+            let (reader, mut writer) = client.into_split();
+            writer
+                .write_all(b"{\"Hello\":{\"username\":\"test\",\"room\":{\"name\":\"test\"}}}\n")
+                .await
+                .unwrap();
+            let mut lines = BufReader::new(reader).lines();
+            // Hello, initial State, initial List: the participant has joined.
+            for _ in 0..3 {
+                assert!(lines.next_line().await.unwrap().is_some());
+            }
+            assert_eq!(engine.list_rooms().await.len(), 1);
+            // Invalid UTF-8 makes lines.next_line() return an I/O error, not EOF.
+            writer.write_all(b"\xff\n").await.unwrap();
+            assert!(server.await.unwrap().is_err());
+            assert!(engine.list_rooms().await.is_empty());
+        })
+        .await
+        .expect("session cleanup timed out");
+    }
 }

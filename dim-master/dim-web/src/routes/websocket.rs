@@ -102,14 +102,43 @@ where
 #[serde(rename_all = "snake_case")]
 #[serde(tag = "type")]
 pub enum ClientActions {
-    Authenticate { token: String },
-    WatchTogetherPlay { room_code: String, position: f64 },
-    WatchTogetherPause { room_code: String, position: f64 },
-    WatchTogetherSeek { room_code: String, position: f64 },
-    WatchTogetherChat { room_code: String, text: String },
-    WatchTogetherBuffering { room_code: String, is_buffering: bool },
-    WatchTogetherReady { room_code: String, is_ready: bool },
-    WatchTogetherSetMode { room_code: String, control_mode: String },
+    Authenticate {
+        token: String,
+    },
+    WatchTogetherPlay {
+        room_code: String,
+        position: f64,
+    },
+    WatchTogetherPause {
+        room_code: String,
+        position: f64,
+    },
+    WatchTogetherSeek {
+        room_code: String,
+        position: f64,
+    },
+    WatchTogetherState {
+        room_code: String,
+        position: f64,
+        paused: bool,
+        media_file_id: Option<i64>,
+    },
+    WatchTogetherChat {
+        room_code: String,
+        text: String,
+    },
+    WatchTogetherBuffering {
+        room_code: String,
+        is_buffering: bool,
+    },
+    WatchTogetherReady {
+        room_code: String,
+        is_ready: bool,
+    },
+    WatchTogetherSetMode {
+        room_code: String,
+        control_mode: String,
+    },
 }
 
 pub type WsMessage = axum::extract::ws::Message;
@@ -212,30 +241,82 @@ pub async fn handle_websocket_session(
         // Delivery on both transports happens inside the manager; failures
         // (room gone, no permission) are non-fatal for the session.
         match action {
-            ClientActions::WatchTogetherPlay { room_code, position } => {
-                let _ = watch_together.set_playback(&room_code, user_id, "play", position).await;
+            ClientActions::WatchTogetherPlay {
+                room_code,
+                position,
+            } => {
+                let _ = watch_together
+                    .set_playback(&room_code, user_id, "play", position)
+                    .await;
             }
-            ClientActions::WatchTogetherPause { room_code, position } => {
-                let _ = watch_together.set_playback(&room_code, user_id, "pause", position).await;
+            ClientActions::WatchTogetherPause {
+                room_code,
+                position,
+            } => {
+                let _ = watch_together
+                    .set_playback(&room_code, user_id, "pause", position)
+                    .await;
             }
-            ClientActions::WatchTogetherSeek { room_code, position } => {
-                let _ = watch_together.set_playback(&room_code, user_id, "seek", position).await;
+            ClientActions::WatchTogetherSeek {
+                room_code,
+                position,
+            } => {
+                let _ = watch_together
+                    .set_playback(&room_code, user_id, "seek", position)
+                    .await;
+            }
+            ClientActions::WatchTogetherState {
+                room_code,
+                position,
+                paused,
+                media_file_id,
+            } => {
+                let engine = watch_together.engine();
+                if let Ok(notifs) = engine
+                    .report_host_state(
+                        dim_core::sync_engine::ParticipantId::DimUser(user_id),
+                        &room_code,
+                        position,
+                        paused,
+                        media_file_id,
+                    )
+                    .await
+                {
+                    engine.dispatch(notifs).await;
+                }
             }
             ClientActions::WatchTogetherChat { room_code, text } => {
-                let _ = watch_together.add_chat_message(&room_code, user_id, &username, text).await;
+                let _ = watch_together
+                    .add_chat_message(&room_code, user_id, &username, text)
+                    .await;
             }
-            ClientActions::WatchTogetherBuffering { room_code, is_buffering } => {
-                let _ = watch_together.set_buffering(&room_code, user_id, &username, is_buffering).await;
+            ClientActions::WatchTogetherBuffering {
+                room_code,
+                is_buffering,
+            } => {
+                let _ = watch_together
+                    .set_buffering(&room_code, user_id, &username, is_buffering)
+                    .await;
             }
-            ClientActions::WatchTogetherReady { room_code, is_ready } => {
-                let _ = watch_together.set_ready(&room_code, user_id, is_ready).await;
+            ClientActions::WatchTogetherReady {
+                room_code,
+                is_ready,
+            } => {
+                let _ = watch_together
+                    .set_ready(&room_code, user_id, is_ready)
+                    .await;
             }
-            ClientActions::WatchTogetherSetMode { room_code, control_mode } => {
+            ClientActions::WatchTogetherSetMode {
+                room_code,
+                control_mode,
+            } => {
                 let mode = match control_mode.as_str() {
                     "egalitarian" => dim_core::sync_engine::ControlMode::Egalitarian,
                     _ => dim_core::sync_engine::ControlMode::HostOnly,
                 };
-                let _ = watch_together.set_control_mode(&room_code, user_id, mode).await;
+                let _ = watch_together
+                    .set_control_mode(&room_code, user_id, mode)
+                    .await;
             }
             ClientActions::Authenticate { .. } => {
                 // Already authenticated, ignore
@@ -246,7 +327,12 @@ pub async fn handle_websocket_session(
     // Disconnect: clean up Watch Together state. This is addr-scoped — if the
     // user already reconnected on a new socket, this is a no-op and the live
     // connection stays in the room.
-    watch_together.handle_ws_disconnect(user_id, addr).await;
+    // Keep membership briefly while the browser replaces a dropped socket.
+    // Addr-scoped cleanup becomes a no-op once the replacement authenticates.
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        watch_together.handle_ws_disconnect(user_id, addr).await;
+    });
     let _ = socket_tx.send(CtrlEvent::Forget { addr }).await;
 }
 

@@ -12,6 +12,7 @@ import {
   WT_SET_CONTROL_MODE,
   WT_MODE_CHANGED,
   WT_SET_EXTERNAL_HOST_FILE,
+  WT_EXPECT_EPISODE,
 } from "../actions/types";
 
 interface WtParticipant {
@@ -40,6 +41,10 @@ interface WatchTogetherState {
   playbackState: string;
   syncPosition: number;
   lastSyncServerTime: number;
+  syncReceivedAt: number | null;
+  syncTransitSeconds: number;
+  roomPassword: string | null;
+  sessionVersion: number;
   participants: WtParticipant[];
   chatMessages: ChatMsg[];
   chatOpen: boolean;
@@ -62,6 +67,12 @@ interface WatchTogetherState {
   };
   /** True when we are a guest following an external Syncplay host. */
   externalIsGuest: boolean;
+  /**
+   * File the local host just advanced the room to. The room restarts paused
+   * on an episode change, so the host's new player must autoplay this file
+   * itself (its report then starts the room for everyone).
+   */
+  autoplayFileId: number | null;
 }
 
 const initialState: WatchTogetherState = {
@@ -73,6 +84,10 @@ const initialState: WatchTogetherState = {
   playbackState: "paused",
   syncPosition: 0,
   lastSyncServerTime: 0,
+  syncReceivedAt: null,
+  syncTransitSeconds: 0,
+  roomPassword: null,
+  sessionVersion: 0,
   participants: [],
   chatMessages: [],
   chatOpen: false,
@@ -82,6 +97,7 @@ const initialState: WatchTogetherState = {
   externalSync: null,
   externalHostFile: null,
   externalIsGuest: false,
+  autoplayFileId: null,
 };
 
 export default function watchTogetherReducer(
@@ -100,16 +116,22 @@ export default function watchTogetherReducer(
         playbackState: action.payload.playback_state,
         syncPosition: action.payload.playback_position,
         lastSyncServerTime: action.payload.server_time_ms,
+        syncReceivedAt: action.payload.client_received_at ?? null,
+        syncTransitSeconds: action.payload.transit_seconds || 0,
+        roomPassword: action.payload.roomPassword || null,
+        sessionVersion: state.sessionVersion + 1,
+        isReady: action.payload.isReady || false,
         participants: action.payload.participants || [],
         controlMode: action.payload.control_mode || "host_only",
         externalSync: action.payload.externalSync ?? null,
         // Reset guest state — will be determined fresh by onHostStatus.
         externalHostFile: null,
         externalIsGuest: false,
+        autoplayFileId: null,
         error: null,
       };
     case WT_LEAVE_ROOM:
-      return { ...initialState };
+      return { ...initialState, sessionVersion: state.sessionVersion + 1 };
     case WT_SYNC_PLAYBACK:
       return {
         ...state,
@@ -121,20 +143,30 @@ export default function watchTogetherReducer(
             : state.playbackState,
         syncPosition: action.payload.position,
         lastSyncServerTime: action.payload.server_time_ms,
+        syncReceivedAt: action.payload.client_received_at ?? null,
       };
     case WT_UPDATE_PARTICIPANTS:
       return {
         ...state,
+        mediaFileId: action.payload.media_file_id ?? state.mediaFileId,
+        mediaName: action.payload.media_name ?? state.mediaName,
         participants: action.payload.participants,
+        // Match by user id when known: the server renames colliding display
+        // names (e.g. "pat (2)"), so a username match can miss ourselves.
         isHost: action.payload.participants.some(
           (p: WtParticipant) =>
-            p.username === action.payload.currentUsername && p.is_host
+            p.is_host &&
+            (action.payload.currentUserId != null
+              ? p.user_id === action.payload.currentUserId
+              : p.username === action.payload.currentUsername)
         ),
         playbackState: action.payload.playback_state || state.playbackState,
         syncPosition:
           action.payload.playback_position ?? state.syncPosition,
         lastSyncServerTime:
           action.payload.server_time_ms || state.lastSyncServerTime,
+        syncReceivedAt: action.payload.playback_position != null
+          ? action.payload.client_received_at ?? null : state.syncReceivedAt,
       };
     case WT_ADD_CHAT_MESSAGE:
       return {
@@ -144,6 +176,7 @@ export default function watchTogetherReducer(
     case WT_ROOM_DESTROYED:
       return {
         ...initialState,
+        sessionVersion: state.sessionVersion + 1,
         error:
           action.payload.reason === "host_left"
             ? "The host has left the room."
@@ -172,8 +205,9 @@ export default function watchTogetherReducer(
       // The event fires for EVERY participant's toggle — only mirror it into
       // the local `isReady` (which drives the Ready button) when it's about
       // the local user, otherwise someone else's toggle flips our button.
-      const isLocalUser =
-        action.payload.currentUsername != null &&
+      const isLocalUser = action.payload.currentUserId != null
+        ? action.payload.user_id === action.payload.currentUserId
+        : action.payload.currentUsername != null &&
         state.participants.some(
           (p) =>
             p.user_id === action.payload.user_id &&
@@ -198,6 +232,11 @@ export default function watchTogetherReducer(
       return {
         ...state,
         controlMode: action.payload.control_mode,
+      };
+    case WT_EXPECT_EPISODE:
+      return {
+        ...state,
+        autoplayFileId: action.payload,
       };
     case WT_SET_EXTERNAL_HOST_FILE:
       return {

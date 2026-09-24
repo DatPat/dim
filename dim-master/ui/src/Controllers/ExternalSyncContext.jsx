@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { useHistory } from "react-router-dom";
 
@@ -18,6 +18,11 @@ export function ExternalSyncProvider({ children }) {
   const externalSync = useSelector((store) => store.watchTogether.externalSync);
   const auth = useSelector((store) => store.auth);
   const clientRef = useRef(null);
+  // State mirror of clientRef: consumers' effects must re-run once the client
+  // exists. Our effect runs AFTER the effects of children that mount in the
+  // same commit (e.g. connecting from inside the player), so they would
+  // otherwise only ever see a null ref.
+  const [client, setClient] = useState(null);
   const listenersRef = useRef(new Set());
   const currentFileIdRef = useRef(null);
 
@@ -42,6 +47,7 @@ export function ExternalSyncProvider({ children }) {
       if (clientRef.current) {
         clientRef.current.disconnect();
         clientRef.current = null;
+        setClient(null);
       }
       currentFileIdRef.current = null;
       return;
@@ -73,10 +79,16 @@ export function ExternalSyncProvider({ children }) {
       );
     };
 
+    let active = true;
+    let fileRequest = 0;
+    let fileAbort = null;
     client.onFileChange = async (fileId, fileName) => {
       if (fileId === currentFileIdRef.current) return;
 
       currentFileIdRef.current = fileId;
+      const request = ++fileRequest;
+      fileAbort?.abort();
+      fileAbort = new AbortController();
 
       dispatch({
         type: WT_SET_EXTERNAL_HOST_FILE,
@@ -88,12 +100,14 @@ export function ExternalSyncProvider({ children }) {
         const token = tokenRef.current;
         const res = await fetch(`/api/v1/mediafile/${fileId}`, {
           headers: token ? { authorization: token } : {},
+          signal: fileAbort.signal,
         });
         fileExists = res.ok;
       } catch {
         // file check failed
       }
 
+      if (!active || request !== fileRequest) return;
       if (fileExists) {
         dispatch({
           type: WT_SET_EXTERNAL_HOST_FILE,
@@ -107,6 +121,8 @@ export function ExternalSyncProvider({ children }) {
 
         client.setReady(true);
       } else {
+        // Allow a later announcement to retry a failed/transient lookup.
+        currentFileIdRef.current = null;
         dispatch({
           type: WT_SET_EXTERNAL_HOST_FILE,
           payload: { fileId, fileName, status: "missing" },
@@ -116,10 +132,14 @@ export function ExternalSyncProvider({ children }) {
 
     client.connect();
     clientRef.current = client;
+    setClient(client);
 
     return () => {
+      active = false;
+      fileAbort?.abort();
       client.disconnect();
       clientRef.current = null;
+      setClient(null);
       currentFileIdRef.current = null;
     };
   // Only reconnect when externalSync changes (connect/disconnect).
@@ -128,8 +148,8 @@ export function ExternalSyncProvider({ children }) {
   }, [externalSync]);
 
   const value = useMemo(
-    () => ({ clientRef, onStateUpdate, sendChat }),
-    [onStateUpdate, sendChat]
+    () => ({ clientRef, client, onStateUpdate, sendChat }),
+    [client, onStateUpdate, sendChat]
   );
 
   return (

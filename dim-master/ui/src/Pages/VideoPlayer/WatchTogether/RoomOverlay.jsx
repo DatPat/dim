@@ -1,5 +1,7 @@
 import { useCallback, useContext, useRef, useState } from "react";
 import { useDispatch, useSelector } from "react-redux";
+import { useHistory } from "react-router-dom";
+import { removeRoomFromUrl } from "./useRoomLifecycle";
 
 import { WebSocketContext } from "../../../Components/WS";
 import { leaveRoom, wtToggleChat } from "../../../actions/watchTogether";
@@ -12,6 +14,7 @@ import "./WatchTogether.scss";
 
 function RoomOverlay() {
   const dispatch = useDispatch();
+  const history = useHistory();
   const ws = useContext(WebSocketContext);
   const { roomCode, isHost, chatOpen, controlMode, isReady } = useSelector(
     (store) => store.watchTogether
@@ -29,8 +32,9 @@ function RoomOverlay() {
   }, [roomCode]);
 
   const handleLeave = useCallback(() => {
+    removeRoomFromUrl(history);
     dispatch(leaveRoom(roomCode));
-  }, [dispatch, roomCode]);
+  }, [dispatch, roomCode, history]);
 
   const handleToggleChat = useCallback(() => {
     dispatch(wtToggleChat());
