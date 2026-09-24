@@ -308,6 +308,14 @@ impl FFPStream {
         Some(self.format.duration.parse::<f64>().ok()? as i32)
     }
 
+    pub fn get_start_time(&self) -> Option<f64> {
+        self.format
+            .start_time
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+    }
+
     pub fn get_ms(&self) -> Option<u128> {
         self.format
             .duration

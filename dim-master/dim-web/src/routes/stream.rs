@@ -12,6 +12,7 @@ use dim_core::core::StateManager;
 use dim_core::stream_tracking::ContentType;
 use dim_core::stream_tracking::StreamTracking;
 use dim_core::stream_tracking::VirtualManifest;
+use dim_core::streaming::direct_play::{has_compatible_timing, SEGMENT_SECONDS};
 use dim_core::streaming::ffprobe::FFPStream;
 use dim_core::streaming::ffprobe::FFProbeCtx;
 use dim_core::streaming::get_avc1_tag;
@@ -149,7 +150,38 @@ pub async fn return_virtual_manifest(
     // Direct play only makes sense when the browser can decode the file's
     // native codec (try_create_dstream itself verifies a transmux profile
     // exists).
-    let direct_play_codec = native_output_codec.filter(|c| browser_codecs.contains(c));
+    let mut direct_play_codec = native_output_codec.filter(|c| browser_codecs.contains(c));
+    let mut direct_play_reason = None;
+    if direct_play_codec.is_some() {
+        // Codec support alone does not make stream copy safe. Our DASH
+        // manifest promises fixed-duration segments; HLS can only cut copied
+        // video at existing keyframes. Reject sources that would drift away
+        // from that timeline and use the normal transcode quality tiers.
+        let timing = if let Some(start_time) = info.get_start_time() {
+            has_compatible_timing(
+                dim_core::streaming::FFPROBE_BIN.as_ref(),
+                path::Path::new(&media.target_file),
+                info.get_primary("video").unwrap().index,
+                start_time,
+            )
+            .await
+        } else {
+            Ok(false)
+        };
+        let reason = match timing {
+            Ok(true) => None,
+            Ok(false) => Some("source keyframes do not match the playback timeline"),
+            Err(error) => {
+                tracing::warn!(%error, mediafile_id = id, "Could not validate direct-play timing");
+                Some("source segment timing could not be verified")
+            }
+        };
+        if let Some(reason) = reason {
+            tracing::info!(mediafile_id = id, reason, "Using transcode to preserve playback timing");
+            direct_play_codec = None;
+            direct_play_reason = Some(reason);
+        }
+    }
 
     // Transcode quality tiers use the configured codec — unless the browser
     // can't decode it, in which case a codec conversion is mandatory or the
@@ -174,7 +206,7 @@ pub async fn return_virtual_manifest(
     let should_stream_default = if let Some(native_codec) = direct_play_codec {
         try_create_dstream(&info, &media, &stream_tracking, &gid, &state, &user_prefs, native_codec).await?
     } else {
-        if let Some(native_codec) = native_output_codec {
+        if let Some(native_codec) = native_output_codec.filter(|_| direct_play_reason.is_none()) {
             tracing::info!(
                 native_codec,
                 browser_codecs = ?browser_codecs,
@@ -193,6 +225,7 @@ pub async fn return_virtual_manifest(
         &user_prefs,
         should_stream_default,
         transcode_codec,
+        direct_play_reason,
     )
     .await?;
     create_audio(&info, &media, &stream_tracking, &gid, &state).await?;
@@ -241,7 +274,7 @@ pub async fn try_create_dstream(
         output_ctx: OutputCtx {
             codec: target_codec.to_string(),
             start_num: 0,
-            target_gop: 10,
+            target_gop: SEGMENT_SECONDS,
             ..Default::default()
         },
         force_software_decode: force_sw_decode,
@@ -309,7 +342,7 @@ pub async fn try_create_dstream(
                 .set_bandwidth(bitrate)
                 .set_args([("height", video_stream.height.clone().unwrap())])
                 .set_is_default(!should_stream_default)
-                .set_target_duration(10)
+                .set_target_duration(SEGMENT_SECONDS)
                 .set_label(label);
 
         stream_tracking.insert(&gid, virtual_manifest).await;
@@ -327,6 +360,7 @@ pub async fn create_video(
     prefs: &UserSettings,
     mut should_stream_default: bool,
     target_codec: &str,
+    direct_play_reason: Option<&str>,
 ) -> Result<(), DimErrorWrapper> {
     let video_stream = info
         .get_primary("video")
@@ -484,6 +518,9 @@ pub async fn create_video(
                 || (input_codec == "av1" && target_codec == "av1");
 
             let mut parts = Vec::new();
+            if let Some(reason) = direct_play_reason {
+                parts.push(reason.to_string());
+            }
             if !can_transmux {
                 parts.push(format!("codec conversion ({} \u{2192} {})", input_codec, target_codec));
             }

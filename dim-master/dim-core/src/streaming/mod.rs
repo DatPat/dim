@@ -1,4 +1,5 @@
 pub mod ffprobe;
+pub mod direct_play;
 
 use cfg_if::cfg_if;
 

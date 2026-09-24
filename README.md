@@ -34,6 +34,11 @@ history.
 
 - **VP9 direct play** — VP9 sources are transmuxed into fMP4 (`vp09` sample
   entries) instead of being force-transcoded.
+- **Direct-play timing validation** — files whose keyframes cannot match the
+  fixed DASH segment timeline automatically use transcoding, preventing
+  accumulated timing drift. Packet probes are cached by file size and
+  modification time; a first probe can take up to 30 seconds, after which
+  playback falls back to transcoding if timing could not be verified.
 - **H.266/VVC support** via software transcode fallback.
 - **Player freeze fixes**: an error boundary around the player (a render crash
   no longer blanks the whole app), a stall guard, dash.js gap-jumping, and a
