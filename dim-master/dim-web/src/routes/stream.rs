@@ -66,6 +66,39 @@ pub struct VirtualManifestParams {
     /// (e.g. "h264,av1"). Empty/missing means assume h264 only.
     #[serde(default)]
     supported_codecs: String,
+    /// Comma-separated list of audio codecs the browser can play via
+    /// MediaSource (e.g. "aac,opus,flac"). Missing means assume AAC only.
+    #[serde(default)]
+    supported_audio_codecs: String,
+}
+
+/// MSE `codecs=` string advertised in the DASH manifest for an output codec.
+fn audio_codec_string(codec: &str) -> &'static str {
+    match codec {
+        "opus" => "opus",
+        "flac" => "flac",
+        "ac3" => "ac-3",
+        "eac3" => "ec-3",
+        _ => "mp4a.40.2",
+    }
+}
+
+/// Resolve the audio transcode target: the server-configured codec if the
+/// browser reported it can decode it, otherwise AAC (universally supported).
+fn resolve_audio_codec(supported_audio_codecs: &str) -> &'static str {
+    let configured = dim_core::settings::get_global_settings()
+        .default_audio_codec
+        .as_str();
+    if configured == "aac" || supported_audio_codecs.split(',').any(|c| c == configured) {
+        configured
+    } else {
+        tracing::info!(
+            configured,
+            supported_audio_codecs,
+            "Browser does not support the configured audio codec, falling back to AAC"
+        );
+        "aac"
+    }
 }
 
 /// Method mapped to `GET /api/v1/stream/<id>/manifest?<gid>` returns or creates a virtual
@@ -228,7 +261,8 @@ pub async fn return_virtual_manifest(
         direct_play_reason,
     )
     .await?;
-    create_audio(&info, &media, &stream_tracking, &gid, &state).await?;
+    let audio_codec = resolve_audio_codec(&params.supported_audio_codecs);
+    create_audio(&info, &media, &stream_tracking, &gid, &state, audio_codec).await?;
     create_subtitles(
         &info,
         &media,
@@ -578,6 +612,7 @@ pub async fn create_audio(
     stream_tracking: &StreamTracking,
     gid: &Uuid,
     state: &StateManager,
+    target_codec: &str,
 ) -> Result<(), DimErrorWrapper> {
     let audio_streams = info.find_by_type("audio");
 
@@ -593,7 +628,7 @@ pub async fn create_audio(
             file: media.target_file.clone(),
             input_ctx: stream.clone().into(),
             output_ctx: OutputCtx {
-                codec: "aac".into(),
+                codec: target_codec.into(),
                 start_num: 0,
                 bitrate: Some(bitrate),
                 ..Default::default()
@@ -613,10 +648,24 @@ pub async fn create_audio(
         let audio_codec = dim_core::utils::codec_pretty(stream.get_codec());
         let audio_ch = dim_core::utils::channels_pretty(stream.channels.unwrap_or(2));
 
-        let transcode_reason = if stream.get_codec() == "aac" {
-            Some("re-muxing AAC audio".to_string())
+        let target_pretty = dim_core::utils::codec_pretty(target_codec);
+        let transcode_reason = if stream.get_codec() == target_codec {
+            Some(format!("re-encoding {} audio", target_pretty))
         } else {
-            Some(format!("audio conversion ({} \u{2192} AAC)", stream.get_codec()))
+            Some(format!(
+                "audio conversion ({} \u{2192} {})",
+                stream.get_codec(),
+                target_pretty
+            ))
+        };
+
+        // FLAC has no target bitrate; advertise a typical lossless stereo
+        // rate so the manifest bandwidth isn't wildly understated.
+        let bitrate = match target_codec {
+            "flac" => bitrate.max(1_000_000),
+            "ac3" | "eac3" => 448_000,
+            "opus" => bitrate.clamp(64_000, 512_000),
+            _ => bitrate,
         };
 
         let label = format!("{} ({} {})", audio_lang, audio_codec, audio_ch);
@@ -626,7 +675,7 @@ pub async fn create_audio(
         let virtual_manifest =
             VirtualManifest::new(audio.clone(), chunk_path, init_seg, ContentType::Audio)
                 .set_mime("audio/mp4")
-                .set_codecs("mp4a.40.2")
+                .set_codecs(audio_codec_string(target_codec))
                 .set_bandwidth(bitrate)
                 .set_is_default(is_default)
                 .set_label(label)
@@ -1228,6 +1277,7 @@ pub async fn diagnose_mediafile(
         "settings": {
             "enable_hwaccel": hwaccel,
             "default_video_codec": default_codec,
+            "default_audio_codec": global_settings.default_audio_codec.as_str(),
         },
         "detected_devices": devices,
         "enabled_profiles": enabled_profiles,

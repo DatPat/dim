@@ -69,6 +69,16 @@ const codecOptions = [
   { value: "av1", label: "AV1" },
 ];
 
+// Target format whenever audio has to be transcoded. Browsers that can't
+// decode the chosen format automatically get AAC instead.
+const audioCodecOptions = [
+  { value: "aac", label: "AAC (most compatible)" },
+  { value: "opus", label: "Opus" },
+  { value: "flac", label: "FLAC (lossless)" },
+  { value: "ac3", label: "Dolby Digital (AC-3)" },
+  { value: "eac3", label: "Dolby Digital Plus (E-AC-3)" },
+];
+
 const decodeOptions = [
   { value: "auto", label: "Auto (hardware when available)" },
   { value: "software", label: "Software only" },
@@ -131,6 +141,7 @@ function TranscoderDefaults() {
 
   const hwaccel = globalSettings.enable_hwaccel || "off";
   const codec = globalSettings.default_video_codec || "h264";
+  const audioCodec = globalSettings.default_audio_codec || "aac";
   const decodeMethod = globalSettings.decode_method || "auto";
 
   const handleHwaccelChange = useCallback(
@@ -143,6 +154,13 @@ function TranscoderDefaults() {
   const handleCodecChange = useCallback(
     (value) => {
       dispatch(updateGlobalSettings({ default_video_codec: value }));
+    },
+    [dispatch]
+  );
+
+  const handleAudioCodecChange = useCallback(
+    (value) => {
+      dispatch(updateGlobalSettings({ default_audio_codec: value }));
     },
     [dispatch]
   );
@@ -169,6 +187,12 @@ function TranscoderDefaults() {
         options={codecOptions}
         value={codec}
         onChange={handleCodecChange}
+      />
+      <SettingsDropdown
+        label="Audio transcode format"
+        options={audioCodecOptions}
+        value={audioCodec}
+        onChange={handleAudioCodecChange}
       />
       <SettingsDropdown
         label="Decode method"
