@@ -40,6 +40,11 @@ history.
   modification time; a first probe can take up to 30 seconds, after which
   playback falls back to transcoding if timing could not be verified.
 - **H.266/VVC support** via software transcode fallback.
+- **Selectable audio transcode format** — *Preferences → Playback →
+  Transcoder Settings → Audio transcode format* picks what audio is converted
+  to when it has to be transcoded: AAC (default), Opus, FLAC (lossless),
+  AC-3 or E-AC-3. The player reports which of these the browser can decode,
+  and the server falls back to AAC for browsers that can't play the choice.
 - **Player freeze fixes**: an error boundary around the player (a render crash
   no longer blanks the whole app), a stall guard, dash.js gap-jumping, and a
   fix for a dash.js `destroy()` crash that unmounted the entire UI.

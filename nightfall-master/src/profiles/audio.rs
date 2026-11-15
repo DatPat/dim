@@ -5,10 +5,46 @@ use super::TranscodingProfile;
 
 use crate::error::NightfallError;
 
+/// Audio transcode target. One profile instance is registered per supported
+/// output codec; `supports()` matches on `output_ctx.codec == tag`.
 #[derive(Debug)]
-pub struct AacTranscodeProfile;
+pub struct AudioTranscodeProfile {
+    /// Codec tag used in `OutputCtx::codec` (aac, opus, flac, ac3, eac3).
+    tag: &'static str,
+    /// ffmpeg encoder name.
+    encoder: &'static str,
+    name: &'static str,
+}
 
-impl TranscodingProfile for AacTranscodeProfile {
+impl AudioTranscodeProfile {
+    pub const AAC: Self = Self { tag: "aac", encoder: "aac", name: "AacTranscodeProfile" };
+    pub const OPUS: Self = Self { tag: "opus", encoder: "libopus", name: "OpusTranscodeProfile" };
+    pub const FLAC: Self = Self { tag: "flac", encoder: "flac", name: "FlacTranscodeProfile" };
+    pub const AC3: Self = Self { tag: "ac3", encoder: "ac3", name: "Ac3TranscodeProfile" };
+    pub const EAC3: Self = Self { tag: "eac3", encoder: "eac3", name: "Eac3TranscodeProfile" };
+
+    pub const ALL: [Self; 5] = [Self::AAC, Self::OPUS, Self::FLAC, Self::AC3, Self::EAC3];
+
+    /// Bitrate argument for this encoder, or `None` for lossless output.
+    /// `requested` is usually the *source* bitrate, which can be far outside
+    /// what lossy encoders accept (e.g. a 4 Mb/s TrueHD track).
+    fn bitrate(&self, requested: Option<u64>, out_ch: u64) -> Option<u64> {
+        let requested = requested.unwrap_or(120_000);
+        match self.tag {
+            // Unchanged legacy behaviour; the aac encoder clamps on its own.
+            "aac" => Some(requested),
+            // libopus hard-errors above 256 kb/s per channel.
+            "opus" => Some(requested.clamp(64_000, 256_000 * out_ch.max(1))),
+            // Source bitrates (often multi-Mb/s lossless) mean nothing here;
+            // 448 kb/s is a standard AC-3 table rate and ample for stereo/5.1.
+            "ac3" | "eac3" => Some(448_000),
+            "flac" => None,
+            _ => Some(requested),
+        }
+    }
+}
+
+impl TranscodingProfile for AudioTranscodeProfile {
     fn profile_type(&self) -> ProfileType {
         ProfileType::Transcode
     }
@@ -18,7 +54,7 @@ impl TranscodingProfile for AacTranscodeProfile {
     }
 
     fn name(&self) -> &str {
-        "AacTranscodeProfile"
+        self.name
     }
 
     fn build(&self, ctx: ProfileContext) -> Option<Vec<String>> {
@@ -39,7 +75,7 @@ impl TranscodingProfile for AacTranscodeProfile {
             "-map".into(),
             stream,
             "-c:0".into(),
-            "aac".into(),
+            self.encoder.into(),
         ];
 
         let in_ch = ctx.input_ctx.audio_channels;
@@ -59,9 +95,10 @@ impl TranscodingProfile for AacTranscodeProfile {
             args.append(&mut vec!["-ac".into(), out_ch.to_string()]);
         }
 
-        let ab = ctx.output_ctx.bitrate.unwrap_or(120_000).to_string();
-        args.push("-ab".into());
-        args.push(ab);
+        if let Some(ab) = self.bitrate(ctx.output_ctx.bitrate, out_ch) {
+            args.push("-ab".into());
+            args.push(ab.to_string());
+        }
 
         args.append(&mut vec![
             "-start_at_zero".into(),
@@ -130,7 +167,7 @@ impl TranscodingProfile for AacTranscodeProfile {
     }
 
     fn supports(&self, ctx: &ProfileContext) -> Result<(), NightfallError> {
-        if ctx.output_ctx.codec == "aac" {
+        if ctx.output_ctx.codec == self.tag {
             return Ok(());
         }
 
@@ -140,6 +177,6 @@ impl TranscodingProfile for AacTranscodeProfile {
     }
 
     fn tag(&self) -> &str {
-        "aac"
+        self.tag
     }
 }

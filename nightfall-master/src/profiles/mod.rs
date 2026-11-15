@@ -21,7 +21,7 @@ pub use amf::AmfTranscodeProfile;
 pub use amf::AmfHevcTranscodeProfile;
 #[cfg(windows)]
 pub use amf::AmfAv1TranscodeProfile;
-pub use audio::AacTranscodeProfile;
+pub use audio::AudioTranscodeProfile;
 #[cfg(all(unix, feature = "cuda"))]
 pub use cuda::CudaTranscodeProfile;
 #[cfg(all(unix, feature = "cuda"))]
@@ -251,8 +251,7 @@ pub fn profiles_init(ffmpeg_bin: String) {
         }
     }
 
-    let profiles: Vec<Option<Box<dyn TranscodingProfile>>> = vec![
-        Some(Box::new(AacTranscodeProfile)),
+    let mut profiles: Vec<Option<Box<dyn TranscodingProfile>>> = vec![
         Some(Box::new(H264TranscodeProfile)),
         Some(Box::new(H264TransmuxProfile)),
         Some(Box::new(HevcTransmuxProfile)),
@@ -293,6 +292,11 @@ pub fn profiles_init(ffmpeg_bin: String) {
         #[cfg(windows)]
         Some(Box::new(AmfAv1TranscodeProfile)),
     ];
+    // One audio profile per selectable output codec (aac/opus/flac/ac3/eac3).
+    profiles.extend(
+        IntoIterator::into_iter(AudioTranscodeProfile::ALL)
+            .map(|p| Some(Box::new(p) as Box<dyn TranscodingProfile>)),
+    );
 
     let profiles = profiles.into_iter().filter_map(|x| x).collect::<Vec<_>>();
 

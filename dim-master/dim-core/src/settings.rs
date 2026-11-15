@@ -85,6 +85,34 @@ impl Default for DefaultCodec {
     }
 }
 
+/// Codec audio tracks are converted to whenever audio has to be transcoded.
+/// Every option must be decodable via MSE in fMP4; the stream route falls back
+/// to AAC when the requesting browser can't play the configured one.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultAudioCodec {
+    #[default]
+    Aac,
+    Opus,
+    Flac,
+    Ac3,
+    Eac3,
+}
+
+impl DefaultAudioCodec {
+    /// Codec tag as used by nightfall's `OutputCtx::codec` and the client's
+    /// `supported_audio_codecs` list.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Aac => "aac",
+            Self::Opus => "opus",
+            Self::Flac => "flac",
+            Self::Ac3 => "ac3",
+            Self::Eac3 => "eac3",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 // Every field falls back to `GlobalSettings::default()` when absent so configs
 // written by older versions never fail to parse (a full parse failure would
@@ -108,6 +136,8 @@ pub struct GlobalSettings {
     pub enable_hwaccel: HwAccelMethod,
     #[serde(default)]
     pub default_video_codec: DefaultCodec,
+    #[serde(default)]
+    pub default_audio_codec: DefaultAudioCodec,
     #[serde(default)]
     pub decode_method: DecodeMethod,
     pub version: String,
@@ -164,6 +194,7 @@ impl Default for GlobalSettings {
             secret_key: None,
             enable_hwaccel: HwAccelMethod::Off,
             default_video_codec: DefaultCodec::H264,
+            default_audio_codec: DefaultAudioCodec::Aac,
             decode_method: DecodeMethod::Auto,
             version: String::new(),
             syncplay_enabled: false,
@@ -228,4 +259,34 @@ pub fn set_global_settings(settings: GlobalSettings) -> Result<(), Box<dyn Error
         .write(toml::to_string_pretty(&settings).unwrap().as_ref())
         .unwrap();
     Ok(())
+}
+
+#[cfg(test)]
+mod audio_codec_tests {
+    use super::*;
+
+    #[test]
+    fn missing_audio_codec_defaults_to_aac() {
+        let s: GlobalSettings = serde_json::from_str(r#"{"default_video_codec":"h265"}"#).unwrap();
+        assert_eq!(s.default_audio_codec, DefaultAudioCodec::Aac);
+        assert_eq!(s.default_video_codec, DefaultCodec::H265);
+    }
+
+    #[test]
+    fn audio_codec_roundtrips() {
+        for (raw, codec) in [
+            ("aac", DefaultAudioCodec::Aac),
+            ("opus", DefaultAudioCodec::Opus),
+            ("flac", DefaultAudioCodec::Flac),
+            ("ac3", DefaultAudioCodec::Ac3),
+            ("eac3", DefaultAudioCodec::Eac3),
+        ] {
+            let s: GlobalSettings =
+                serde_json::from_str(&format!(r#"{{"default_audio_codec":"{raw}"}}"#)).unwrap();
+            assert_eq!(s.default_audio_codec, codec);
+            assert_eq!(codec.as_str(), raw);
+            let back = serde_json::to_value(&s).unwrap();
+            assert_eq!(back["default_audio_codec"], raw);
+        }
+    }
 }

@@ -176,7 +176,17 @@ function VideoPlayer() {
       if (MediaSource.isTypeSupported('video/mp4; codecs="vp09.00.40.08"')) supportedCodecs.push("vp9");
     }
 
-    const host = `/api/v1/stream/${params.fileID}/manifest?force_ass=${force_ass}&supported_codecs=${supportedCodecs.join(",")}`;
+    // Audio codecs we can decode in fMP4 — the server only honours the
+    // configured audio transcode codec if it's in this list, else uses AAC.
+    const supportedAudioCodecs = ["aac"];
+    if (typeof MediaSource !== "undefined") {
+      const audioProbes = { opus: "opus", flac: "flac", ac3: "ac-3", eac3: "ec-3" };
+      for (const [codec, mse] of Object.entries(audioProbes)) {
+        if (MediaSource.isTypeSupported(`audio/mp4; codecs="${mse}"`)) supportedAudioCodecs.push(codec);
+      }
+    }
+
+    const host = `/api/v1/stream/${params.fileID}/manifest?force_ass=${force_ass}&supported_codecs=${supportedCodecs.join(",")}&supported_audio_codecs=${supportedAudioCodecs.join(",")}`;
 
     (async () => {
       const config = {
